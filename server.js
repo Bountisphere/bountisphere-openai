@@ -18,7 +18,7 @@ app.get('/', (req, res) => {
 });
 
 // Endpoint to fetch latest transactions from Bubble
-tapp.post('/transactions', async (req, res) => {
+app.post('/transactions', async (req, res) => {
     try {
         const { userId } = req.body;
         if (!userId) return res.status(400).json({ error: 'User ID is required' });
