@@ -1,7 +1,24 @@
+options:
+  logging: CLOUD_LOGGING_ONLY  # Fix for Cloud Build logging error
+
 steps:
   # Install dependencies
   - name: 'gcr.io/cloud-builders/npm'
     args: ['install']
+
+  # Build the container image
+  - name: 'gcr.io/cloud-builders/docker'
+    args: 
+      - 'build'
+      - '-t'
+      - 'gcr.io/$PROJECT_ID/bountisphere-openai'
+      - '.'
+
+  # Push the container image to Google Container Registry
+  - name: 'gcr.io/cloud-builders/docker'
+    args: 
+      - 'push'
+      - 'gcr.io/$PROJECT_ID/bountisphere-openai'
 
   # Deploy to Cloud Run
   - name: 'gcr.io/cloud-builders/gcloud'
@@ -9,7 +26,7 @@ steps:
       - 'run'
       - 'deploy'
       - 'bountisphere-openai'
-      - '--source=.'
+      - '--image=gcr.io/$PROJECT_ID/bountisphere-openai'
       - '--platform=managed'
       - '--region=us-central1'
       - '--allow-unauthenticated'
