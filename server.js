@@ -44,7 +44,7 @@ app.post('/transactions', async (req, res) => {
 // 🔹 Assistant API - This is where Bubble is calling
 app.post('/assistant', async (req, res) => {
     try {
-        const { user_unique_id, message } = req.body;  
+        const { assistantId, threadId, user_unique_id, message, accountId, version } = req.body;  
         if (!user_unique_id || !message) {
             return res.status(400).json({ error: 'Missing user ID or message' });
         }
@@ -52,6 +52,10 @@ app.post('/assistant', async (req, res) => {
         console.log("🛠 Received request at /assistant");
         console.log("🆔 User ID:", user_unique_id);
         console.log("💬 Message:", message);
+        console.log("📌 Assistant ID:", assistantId);
+        console.log("📌 Thread ID:", threadId);
+        console.log("📌 Account ID:", accountId);
+        console.log("📌 Version:", version);
 
         // Fetch latest transactions from Bubble
         const bubbleURL = `${process.env.BUBBLE_API_URL}/transactions?constraints=[{"key":"Created By","constraint_type":"equals","value":"${user_unique_id}"}]`;
