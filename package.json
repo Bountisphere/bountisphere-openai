@@ -2,6 +2,7 @@
   "name": "bountisphere-openai",
   "version": "1.0.0",
   "description": "AI backend for Bountisphere Money Coach, integrating OpenAI with Bubble transaction data.",
+  "type": "module",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
