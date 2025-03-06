@@ -35,7 +35,7 @@ app.post('/transactions', async (req, res) => {
 });
 
 // Endpoint to analyze transactions with OpenAI
-tapp.post('/analyze', async (req, res) => {
+app.post('/analyze', async (req, res) => {
     try {
         const { transactions } = req.body;
         if (!transactions || transactions.length === 0) {
