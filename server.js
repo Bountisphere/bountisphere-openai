@@ -21,18 +21,29 @@ app.get('/', (req, res) => {
 app.post('/transactions', async (req, res) => {
     try {
         const { userId } = req.body;
-        if (!userId) return res.status(400).json({ error: 'User ID is required' });
+        if (!userId) {
+            console.error("🚨 Error: User ID is missing!");
+            return res.status(400).json({ error: 'User ID is required' });
+        }
 
-        // Apply Bubble API constraints to filter by userId
+        // Log environment variables
+        console.log("✅ Cloud Run ENV - BUBBLE_API_URL:", process.env.BUBBLE_API_URL);
+        console.log("✅ Cloud Run ENV - BUBBLE_API_KEY:", process.env.BUBBLE_API_KEY ? "Exists" : "Missing!");
+
+        // Build API URL
         const bubbleURL = `${process.env.BUBBLE_API_URL}/transactions?constraints=[{"key":"Created By","constraint_type":"equals","value":"${userId}"}]`;
+        console.log("🌍 Fetching transactions from:", bubbleURL);
 
+        // Make API request to Bubble
         const response = await axios.get(bubbleURL, {
             headers: { 'Authorization': `Bearer ${process.env.BUBBLE_API_KEY}` }
         });
 
+        console.log("✅ Bubble API Response:", response.data);
         res.json(response.data);
+
     } catch (error) {
-        console.error('Error fetching transactions:', error);
+        console.error("❌ Error fetching transactions:", error.message);
         res.status(500).json({ error: 'Internal server error' });
     }
 });
