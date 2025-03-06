@@ -17,7 +17,7 @@ app.get('/', (req, res) => {
     res.send('Bountisphere OpenAI API is running!');
 });
 
-// Endpoint to fetch latest transactions from Bubble (Filtered by userId)
+// 🔹 Fetch Latest Transactions from Bubble (Filtered by userId)
 app.post('/transactions', async (req, res) => {
     try {
         const { userId } = req.body;
@@ -26,29 +26,66 @@ app.post('/transactions', async (req, res) => {
             return res.status(400).json({ error: 'User ID is required' });
         }
 
-        // Log environment variables
-        console.log("✅ Cloud Run ENV - BUBBLE_API_URL:", process.env.BUBBLE_API_URL);
-        console.log("✅ Cloud Run ENV - BUBBLE_API_KEY:", process.env.BUBBLE_API_KEY ? "Exists" : "Missing!");
-
-        // Build API URL
         const bubbleURL = `${process.env.BUBBLE_API_URL}/transactions?constraints=[{"key":"Created By","constraint_type":"equals","value":"${userId}"}]`;
-        console.log("🌍 Fetching transactions from:", bubbleURL);
 
-        // Make API request to Bubble
+        console.log("🌍 Fetching transactions from:", bubbleURL);
         const response = await axios.get(bubbleURL, {
             headers: { 'Authorization': `Bearer ${process.env.BUBBLE_API_KEY}` }
         });
 
-        console.log("✅ Bubble API Response:", response.data);
+        console.log("✅ Transactions received:", response.data);
         res.json(response.data);
-
     } catch (error) {
         console.error("❌ Error fetching transactions:", error.message);
         res.status(500).json({ error: 'Internal server error' });
     }
 });
 
-// Endpoint to analyze transactions with OpenAI
+// 🔹 Assistant API - This is where Bubble is calling
+app.post('/assistant', async (req, res) => {
+    try {
+        const { user_unique_id, message } = req.body;  
+        if (!user_unique_id || !message) {
+            return res.status(400).json({ error: 'Missing user ID or message' });
+        }
+
+        console.log("🛠 Received request at /assistant");
+        console.log("🆔 User ID:", user_unique_id);
+        console.log("💬 Message:", message);
+
+        // Fetch latest transactions from Bubble
+        const bubbleURL = `${process.env.BUBBLE_API_URL}/transactions?constraints=[{"key":"Created By","constraint_type":"equals","value":"${user_unique_id}"}]`;
+        console.log("🌍 Fetching transactions from:", bubbleURL);
+
+        const response = await axios.get(bubbleURL, {
+            headers: { 'Authorization': `Bearer ${process.env.BUBBLE_API_KEY}` }
+        });
+
+        const transactions = response.data?.response?.results || [];
+        console.log("✅ Transactions received:", transactions);
+
+        // Generate AI response using OpenAI
+        const prompt = `Analyze the following transactions and provide insights: ${JSON.stringify(transactions)}`;
+        const openAIResponse = await axios.post('https://api.openai.com/v1/chat/completions', {
+            model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+            messages: [{ role: 'system', content: prompt }]
+        }, {
+            headers: { 
+                'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
+                'Content-Type': 'application/json'
+            }
+        });
+
+        console.log("🤖 OpenAI Response:", openAIResponse.data);
+        res.json(openAIResponse.data);
+
+    } catch (error) {
+        console.error("❌ Error processing /assistant:", error);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+});
+
+// 🔹 Analyze Transactions
 app.post('/analyze', async (req, res) => {
     try {
         const { transactions } = req.body;
@@ -57,7 +94,6 @@ app.post('/analyze', async (req, res) => {
         }
 
         const prompt = `Analyze the following transactions and provide insights: ${JSON.stringify(transactions)}`;
-        
         const openAIResponse = await axios.post('https://api.openai.com/v1/chat/completions', {
             model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
             messages: [{ role: 'system', content: prompt }]
@@ -70,12 +106,12 @@ app.post('/analyze', async (req, res) => {
 
         res.json(openAIResponse.data);
     } catch (error) {
-        console.error('Error analyzing transactions:', error);
+        console.error('❌ Error analyzing transactions:', error);
         res.status(500).json({ error: 'Internal server error' });
     }
 });
 
-// Start the server
+// 🔹 Start the Server
 app.listen(PORT, () => {
-    console.log(`Server running on port ${PORT}`);
+    console.log(`🚀 Server running on port ${PORT}`);
 });
