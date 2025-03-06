@@ -1,0 +1,16 @@
+steps:
+  # Install dependencies
+  - name: 'gcr.io/cloud-builders/npm'
+    args: ['install']
+
+  # Deploy to Cloud Run
+  - name: 'gcr.io/cloud-builders/gcloud'
+    args: 
+      - 'run'
+      - 'deploy'
+      - 'bountisphere-openai'
+      - '--source=.'
+      - '--platform=managed'
+      - '--region=us-central1'
+      - '--allow-unauthenticated'
+      - '--memory=512Mi'  # Adjust memory based on app needs
