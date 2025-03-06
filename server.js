@@ -55,7 +55,6 @@ app.post('/assistant', async (req, res) => {
         console.log("📌 Assistant ID:", assistantId);
         console.log("📌 Thread ID:", threadId);
         console.log("📌 Account ID:", accountId);
-        console.log("📌 Version:", version);
 
         // Fetch latest transactions from Bubble
         const bubbleURL = `${process.env.BUBBLE_API_URL}/transactions?constraints=[{"key":"Created By","constraint_type":"equals","value":"${user_unique_id}"}]`;
