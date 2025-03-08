@@ -41,7 +41,7 @@ app.post('/transactions', async (req, res) => {
     }
 });
 
-// 🔹 Assistant API - This is where Bubble is calling
+// 🔹 Assistant API - Handles User Queries and Fetches Transactions
 app.post('/assistant', async (req, res) => {
     try {
         const { assistantId, threadId, user_unique_id, message, accountId, version } = req.body;  
@@ -67,10 +67,27 @@ app.post('/assistant', async (req, res) => {
         const transactions = response.data?.response?.results || [];
         console.log("✅ Transactions received:", transactions);
 
-        // Generate AI response using OpenAI
-        const prompt = `Analyze the following transactions and provide insights: ${JSON.stringify(transactions)}`;
+        // 🛑 Check if there are transactions before calling OpenAI
+        if (transactions.length === 0) {
+            return res.json({ message: "No transactions found for this user." });
+        }
+
+        // 🛠️ Filter transactions based on the user query (e.g., "Whole Foods")
+        const filteredTransactions = transactions.filter(tx => 
+            tx.description && tx.description.toLowerCase().includes(message.toLowerCase())
+        );
+
+        // 🛠️ Build a more dynamic OpenAI prompt
+        let prompt;
+        if (filteredTransactions.length > 0) {
+            prompt = `The user asked: "${message}". Based on their transactions, here are the most relevant transactions:\n\n${JSON.stringify(filteredTransactions)}\n\nProvide an analysis of these transactions.`;
+        } else {
+            prompt = `The user asked: "${message}". However, no specific transactions match the request. Provide insights based on all transactions: \n\n${JSON.stringify(transactions)}`;
+        }
+
+        // 🔥 Call OpenAI API with GPT-4o
         const openAIResponse = await axios.post('https://api.openai.com/v1/chat/completions', {
-            model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+            model: process.env.OPENAI_MODEL || 'gpt-4o',
             messages: [{ role: 'system', content: prompt }]
         }, {
             headers: { 
@@ -78,6 +95,11 @@ app.post('/assistant', async (req, res) => {
                 'Content-Type': 'application/json'
             }
         });
+
+        if (!openAIResponse || !openAIResponse.data) {
+            console.error("❌ OpenAI API did not return a valid response.");
+            return res.status(500).json({ error: "Failed to get response from OpenAI" });
+        }
 
         console.log("🤖 OpenAI Response:", openAIResponse.data);
         res.json(openAIResponse.data);
@@ -98,7 +120,7 @@ app.post('/analyze', async (req, res) => {
 
         const prompt = `Analyze the following transactions and provide insights: ${JSON.stringify(transactions)}`;
         const openAIResponse = await axios.post('https://api.openai.com/v1/chat/completions', {
-            model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+            model: process.env.OPENAI_MODEL || 'gpt-4o',
             messages: [{ role: 'system', content: prompt }]
         }, {
             headers: { 
