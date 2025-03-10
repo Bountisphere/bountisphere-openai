@@ -27,7 +27,7 @@ const mapCategory = (category) => {
     return categoryMapping[category] || "Other";
 };
 
-// 🔹 Fetch Only **Past Transactions** (Exclude Future & Pending)
+// 🔹 Fetch Past Transactions (Exclude Future & Pending)
 app.post('/transactions', async (req, res) => {
     try {
         const { userId } = req.body;
@@ -36,7 +36,7 @@ app.post('/transactions', async (req, res) => {
             return res.status(400).json({ error: 'User ID is required' });
         }
 
-        // Get today's date in YYYY-MM-DD format
+        // Get today's date
         const today = new Date().toISOString().split("T")[0];
 
         // Fetch only past transactions (exclude future & pending)
@@ -94,21 +94,37 @@ app.post('/assistant', async (req, res) => {
             return res.json({ message: "No past transactions found for this user." });
         }
 
+        // Log retrieved transactions for debugging
+        console.log("🔍 Retrieved Transactions for OpenAI:", transactions);
+
         // Filter transactions based on user query
         let filteredTransactions = transactions.filter(tx => 
             tx.description.toLowerCase().includes(message.toLowerCase()) || 
+            tx.merchant.toLowerCase().includes(message.toLowerCase()) || 
             tx.category.toLowerCase().includes(message.toLowerCase())
         );
 
         let prompt;
         if (["spend", "transaction", "budget", "expense", "bill", "balance"].some(word => message.toLowerCase().includes(word))) {
             if (filteredTransactions.length > 0) {
-                prompt = `Today's date is ${new Date().toISOString().split("T")[0]}. The user asked: "${message}". Based on their past transactions, here are the relevant transactions:\n\n${filteredTransactions.map(tx => `- $${Math.abs(tx.amount)} at ${tx.merchant} on ${tx.date} (Category: ${tx.category})`).join("\n")}\n\nProvide an analysis.`;
+                prompt = `Today's date is ${new Date().toISOString().split("T")[0]}. 
+                The user asked: "${message}". 
+                
+                Here are their past transactions:
+                ${filteredTransactions.map(tx => `- $${Math.abs(tx.amount)} at ${tx.merchant} on ${tx.date} (Category: ${tx.category})`).join("\n")}
+
+                Provide an analysis based on these transactions.`;
             } else {
-                prompt = `Today's date is ${new Date().toISOString().split("T")[0]}. The user asked: "${message}". However, no matching past transactions were found. Provide general financial insights based on their spending habits.`;
+                prompt = `Today's date is ${new Date().toISOString().split("T")[0]}. 
+                The user asked: "${message}". However, no matching past transactions were found. 
+                
+                Provide general financial insights based on their spending habits.`;
             }
         } else {
-            prompt = `Today's date is ${new Date().toISOString().split("T")[0]}. The user asked: "${message}". Respond only to their question.`;
+            prompt = `Today's date is ${new Date().toISOString().split("T")[0]}. 
+            The user asked: "${message}". 
+            
+            Respond only to their question.`;
         }
 
         // 🔥 Call OpenAI API
@@ -118,6 +134,9 @@ app.post('/assistant', async (req, res) => {
         }, {
             headers: { 'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`, 'Content-Type': 'application/json' }
         });
+
+        // Log OpenAI response for debugging
+        console.log("🤖 OpenAI Response:", openAIResponse.data);
 
         res.json(openAIResponse.data);
 
