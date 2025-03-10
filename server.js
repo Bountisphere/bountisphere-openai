@@ -82,11 +82,24 @@ app.post('/assistant', async (req, res) => {
 
         // 🛠️ Build a more dynamic OpenAI prompt
         let prompt;
-        if (filteredTransactions.length > 0) {
-            prompt = `Today's date is ${today}. The user asked: "${message}". Based on their transactions, here are the most relevant transactions:\n\n${JSON.stringify(filteredTransactions)}\n\nProvide an analysis of these transactions.`;
-        } else {
-            prompt = `Today's date is ${today}. The user asked: "${message}". However, no specific transactions match the request. Provide insights based on all transactions: \n\n${JSON.stringify(transactions)}`;
-        }
+
+    // If the user is asking about transactions, include transaction data
+    if (message.toLowerCase().includes("spend") || 
+        message.toLowerCase().includes("transaction") || 
+        message.toLowerCase().includes("budget") || 
+        message.toLowerCase().includes("expense") || 
+        message.toLowerCase().includes("bill") ||
+        message.toLowerCase().includes("balance")) {
+
+    if (filteredTransactions.length > 0) {
+        prompt = `Today's date is ${today}. The user asked: "${message}". Based on their transactions, here are the most relevant transactions:\n\n${JSON.stringify(filteredTransactions)}\n\nProvide an analysis of these transactions.`;
+    } else {
+        prompt = `Today's date is ${today}. The user asked: "${message}". However, no specific transactions match the request. Provide insights based on all transactions: \n\n${JSON.stringify(transactions)}`;
+    }
+} else {
+    // If the user is NOT asking about money, just respond to their question
+    prompt = `Today's date is ${today}. The user asked: "${message}". Respond only to their question without adding any additional transaction details.`;
+}
 
         // 🔥 Call OpenAI API with GPT-4o
         const openAIResponse = await axios.post('https://api.openai.com/v1/chat/completions', {
