@@ -12,10 +12,20 @@ const PORT = process.env.PORT || 3000;
 // Middleware to parse JSON requests
 app.use(express.json());
 
-// Health check route
-app.get('/', (req, res) => {
-    res.send('Bountisphere OpenAI API is running!');
-});
+// Function to standardize category descriptions
+const mapCategory = (category) => {
+    const categoryMapping = {
+        "FOOD_AND_DRINK_GROCERIES": "Groceries",
+        "FOOD_AND_DRINK_RESTAURANT": "Dining Out",
+        "GENERAL_MERCHANDISE_ONLINE_MARKETPLACES": "Online Shopping",
+        "TRANSPORTATION_GAS": "Gasoline",
+        "BANK_FEES_INTEREST_CHARGE": "Bank Fees",
+        "LOAN_PAYMENTS_CREDIT_CARD_PAYMENT": "Credit Card Payment",
+        "GENERAL_SERVICES_OTHER_GENERAL_SERVICES": "Subscriptions",
+        "EXPENSE_BUSINESS_SERVICES": "Business Expenses"
+    };
+    return categoryMapping[category] || "Other";
+};
 
 // 🔹 Fetch Only **Past Transactions** (Exclude Future & Pending)
 app.post('/transactions', async (req, res) => {
@@ -41,40 +51,25 @@ app.post('/transactions', async (req, res) => {
             headers: { 'Authorization': `Bearer ${process.env.BUBBLE_API_KEY}` }
         });
 
-        console.log("✅ Past transactions received:", response.data);
-        res.json(response.data);
+        let transactions = response.data?.response?.results || [];
+
+        // Filter out mislabeled "Future Transactions" if the date is already in the past
+        transactions = transactions.filter(tx => tx["Transaction Frequency"] !== "Future Transactions");
+
+        // Map category names to standard format
+        transactions = transactions.map(tx => ({
+            date: tx.Date,
+            amount: tx.Amount,
+            description: tx.Description,
+            merchant: tx["Merchant Name"] || tx.Description,
+            category: mapCategory(tx["Personal Finance Category"]),
+            bank: tx.Bank
+        }));
+
+        console.log("✅ Cleaned past transactions:", transactions);
+        res.json(transactions);
     } catch (error) {
         console.error("❌ Error fetching past transactions:", error.message);
-        res.status(500).json({ error: 'Internal server error' });
-    }
-});
-
-// 🔹 Fetch Only **Future Transactions** (For Upcoming Bills)
-app.post('/future-transactions', async (req, res) => {
-    try {
-        const { userId } = req.body;
-        if (!userId) {
-            return res.status(400).json({ error: 'User ID is required' });
-        }
-
-        // Get today's date
-        const today = new Date().toISOString().split("T")[0];
-
-        // Fetch only future transactions
-        const bubbleURL = `${process.env.BUBBLE_API_URL}/transactions?constraints=[
-            {"key":"Created By","constraint_type":"equals","value":"${userId}"},
-            {"key":"Date","constraint_type":"greater than","value":"${today}"}
-        ]`;
-
-        console.log("🌍 Fetching future transactions from:", bubbleURL);
-        const response = await axios.get(bubbleURL, {
-            headers: { 'Authorization': `Bearer ${process.env.BUBBLE_API_KEY}` }
-        });
-
-        console.log("✅ Future transactions received:", response.data);
-        res.json(response.data);
-    } catch (error) {
-        console.error("❌ Error fetching future transactions:", error.message);
         res.status(500).json({ error: 'Internal server error' });
     }
 });
@@ -89,43 +84,31 @@ app.post('/assistant', async (req, res) => {
 
         console.log("🛠 Received request at /assistant");
 
-        // Get today's date
-        const today = new Date().toISOString().split("T")[0];
-
         // Fetch past transactions (only completed transactions)
-        const bubbleURL = `${process.env.BUBBLE_API_URL}/transactions?constraints=[
-            {"key":"Created By","constraint_type":"equals","value":"${user_unique_id}"},
-            {"key":"Date","constraint_type":"less than","value":"${today}"},
-            {"key":"is_pending?","constraint_type":"equals","value":"false"}
-        ]`;
-        console.log("🌍 Fetching past transactions from:", bubbleURL);
-
-        const response = await axios.get(bubbleURL, {
-            headers: { 'Authorization': `Bearer ${process.env.BUBBLE_API_KEY}` }
+        const transactionsResponse = await axios.post('https://bountisphere-openai-617952217530.us-central1.run.app/transactions', {
+            userId: user_unique_id
         });
 
-        const transactions = response.data?.response?.results || [];
-        console.log("✅ Past transactions received:", transactions);
-
+        let transactions = transactionsResponse.data || [];
         if (transactions.length === 0) {
             return res.json({ message: "No past transactions found for this user." });
         }
 
-        // 🛠️ Filter transactions based on user query
+        // Filter transactions based on user query
         let filteredTransactions = transactions.filter(tx => 
             tx.description.toLowerCase().includes(message.toLowerCase()) || 
-            tx.Category.toLowerCase().includes(message.toLowerCase())
+            tx.category.toLowerCase().includes(message.toLowerCase())
         );
 
         let prompt;
         if (["spend", "transaction", "budget", "expense", "bill", "balance"].some(word => message.toLowerCase().includes(word))) {
             if (filteredTransactions.length > 0) {
-                prompt = `Today's date is ${today}. The user asked: "${message}". Based on their past transactions, here are the relevant transactions:\n\n${filteredTransactions.map(tx => `- $${Math.abs(tx.Amount)} at ${tx.Description} on ${tx.Date}`).join("\n")}\n\nProvide an analysis.`;
+                prompt = `Today's date is ${new Date().toISOString().split("T")[0]}. The user asked: "${message}". Based on their past transactions, here are the relevant transactions:\n\n${filteredTransactions.map(tx => `- $${Math.abs(tx.amount)} at ${tx.merchant} on ${tx.date} (Category: ${tx.category})`).join("\n")}\n\nProvide an analysis.`;
             } else {
-                prompt = `Today's date is ${today}. The user asked: "${message}". However, no matching past transactions were found. Provide general financial insights based on their spending habits.`;
+                prompt = `Today's date is ${new Date().toISOString().split("T")[0]}. The user asked: "${message}". However, no matching past transactions were found. Provide general financial insights based on their spending habits.`;
             }
         } else {
-            prompt = `Today's date is ${today}. The user asked: "${message}". Respond only to their question.`;
+            prompt = `Today's date is ${new Date().toISOString().split("T")[0]}. The user asked: "${message}". Respond only to their question.`;
         }
 
         // 🔥 Call OpenAI API
@@ -140,30 +123,6 @@ app.post('/assistant', async (req, res) => {
 
     } catch (error) {
         console.error("❌ Error processing /assistant:", error);
-        res.status(500).json({ error: 'Internal server error' });
-    }
-});
-
-// 🔹 Analyze Transactions
-app.post('/analyze', async (req, res) => {
-    try {
-        const { transactions } = req.body;
-        if (!transactions || transactions.length === 0) {
-            return res.status(400).json({ error: 'No transactions provided' });
-        }
-
-        const prompt = `Analyze the following past transactions and provide insights:\n\n${transactions.map(tx => `- $${Math.abs(tx.Amount)} at ${tx.Description} on ${tx.Date}`).join("\n")}`;
-
-        const openAIResponse = await axios.post('https://api.openai.com/v1/chat/completions', {
-            model: process.env.OPENAI_MODEL || 'gpt-4o',
-            messages: [{ role: 'system', content: "You are a financial assistant providing transaction insights." }, { role: 'user', content: prompt }]
-        }, {
-            headers: { 'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`, 'Content-Type': 'application/json' }
-        });
-
-        res.json(openAIResponse.data);
-    } catch (error) {
-        console.error("❌ Error analyzing transactions:", error);
         res.status(500).json({ error: 'Internal server error' });
     }
 });
