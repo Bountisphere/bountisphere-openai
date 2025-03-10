@@ -56,6 +56,9 @@ app.post('/assistant', async (req, res) => {
         console.log("📌 Thread ID:", threadId);
         console.log("📌 Account ID:", accountId);
 
+          // Get today's date
+        const today = new Date().toISOString().split("T")[0]; // YYYY-MM-DD format
+
         // Fetch latest transactions from Bubble
         const bubbleURL = `${process.env.BUBBLE_API_URL}/transactions?constraints=[{"key":"Created By","constraint_type":"equals","value":"${user_unique_id}"}]`;
         console.log("🌍 Fetching transactions from:", bubbleURL);
