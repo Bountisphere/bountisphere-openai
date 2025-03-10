@@ -26,11 +26,11 @@ app.post('/transactions', async (req, res) => {
             return res.status(400).json({ error: 'User ID is required' });
         }
 
-        const bubbleURL = ${process.env.BUBBLE_API_URL}/transactions?constraints=[{"key":"Created By","constraint_type":"equals","value":"${userId}"}];
+        const bubbleURL = `${process.env.BUBBLE_API_URL}/transactions?constraints=[{"key":"Created By","constraint_type":"equals","value":"${userId}"}]`;
 
         console.log("🌍 Fetching transactions from:", bubbleURL);
         const response = await axios.get(bubbleURL, {
-            headers: { 'Authorization': Bearer ${process.env.BUBBLE_API_KEY} }
+            headers: { 'Authorization': `Bearer ${process.env.BUBBLE_API_KEY}` }
         });
 
         console.log("✅ Transactions received:", response.data);
@@ -57,11 +57,11 @@ app.post('/assistant', async (req, res) => {
         console.log("📌 Account ID:", accountId);
 
         // Fetch latest transactions from Bubble
-        const bubbleURL = ${process.env.BUBBLE_API_URL}/transactions?constraints=[{"key":"Created By","constraint_type":"equals","value":"${user_unique_id}"}];
+        const bubbleURL = `${process.env.BUBBLE_API_URL}/transactions?constraints=[{"key":"Created By","constraint_type":"equals","value":"${user_unique_id}"}]`;
         console.log("🌍 Fetching transactions from:", bubbleURL);
 
         const response = await axios.get(bubbleURL, {
-            headers: { 'Authorization': Bearer ${process.env.BUBBLE_API_KEY} }
+            headers: { 'Authorization': `Bearer ${process.env.BUBBLE_API_KEY}` }
         });
 
         const transactions = response.data?.response?.results || [];
@@ -80,9 +80,9 @@ app.post('/assistant', async (req, res) => {
         // 🛠️ Build a more dynamic OpenAI prompt
         let prompt;
         if (filteredTransactions.length > 0) {
-            prompt = The user asked: "${message}". Based on their transactions, here are the most relevant transactions:\n\n${JSON.stringify(filteredTransactions)}\n\nProvide an analysis of these transactions.;
+            prompt = `The user asked: "${message}". Based on their transactions, here are the most relevant transactions:\n\n${JSON.stringify(filteredTransactions)}\n\nProvide an analysis of these transactions.`;
         } else {
-            prompt = The user asked: "${message}". However, no specific transactions match the request. Provide insights based on all transactions: \n\n${JSON.stringify(transactions)};
+            prompt = `The user asked: "${message}". However, no specific transactions match the request. Provide insights based on all transactions: \n\n${JSON.stringify(transactions)}`;
         }
 
         // 🔥 Call OpenAI API with GPT-4o
@@ -91,7 +91,7 @@ app.post('/assistant', async (req, res) => {
             messages: [{ role: 'system', content: prompt }]
         }, {
             headers: { 
-                'Authorization': Bearer ${process.env.OPENAI_API_KEY},
+                'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
                 'Content-Type': 'application/json'
             }
         });
@@ -118,13 +118,13 @@ app.post('/analyze', async (req, res) => {
             return res.status(400).json({ error: 'No transactions provided' });
         }
 
-        const prompt = Analyze the following transactions and provide insights: ${JSON.stringify(transactions)};
+        const prompt = `Analyze the following transactions and provide insights: ${JSON.stringify(transactions)}`;
         const openAIResponse = await axios.post('https://api.openai.com/v1/chat/completions', {
             model: process.env.OPENAI_MODEL || 'gpt-4o',
             messages: [{ role: 'system', content: prompt }]
         }, {
             headers: { 
-                'Authorization': Bearer ${process.env.OPENAI_API_KEY},
+                'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
                 'Content-Type': 'application/json'
             }
         });
@@ -138,5 +138,5 @@ app.post('/analyze', async (req, res) => {
 
 // 🔹 Start the Server
 app.listen(PORT, () => {
-    console.log(🚀 Server running on port ${PORT});
+    console.log(`🚀 Server running on port ${PORT}`);
 });
