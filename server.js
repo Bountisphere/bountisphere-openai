@@ -52,9 +52,6 @@ app.post('/assistant', async (req, res) => {
         console.log("🛠 Received request at /assistant");
         console.log("🆔 User ID:", user_unique_id);
         console.log("💬 Message:", message);
-        console.log("📌 Assistant ID:", assistantId);
-        console.log("📌 Thread ID:", threadId);
-        console.log("📌 Account ID:", accountId);
 
         // Fetch latest transactions from Bubble
         const bubbleURL = `${process.env.BUBBLE_API_URL}/transactions?constraints=[{"key":"Created By","constraint_type":"equals","value":"${user_unique_id}"}]`;
@@ -67,25 +64,71 @@ app.post('/assistant', async (req, res) => {
         const transactions = response.data?.response?.results || [];
         console.log("✅ Transactions received:", transactions);
 
-        // 🛑 Check if there are transactions before calling OpenAI
         if (transactions.length === 0) {
             return res.json({ message: "No transactions found for this user." });
         }
 
-        // 🛠️ Filter transactions based on the user query (e.g., "Whole Foods")
-        const filteredTransactions = transactions.filter(tx => 
-            tx.description && tx.description.toLowerCase().includes(message.toLowerCase())
-        );
+        // Categorize Transactions
+        const categories = {
+            "Dining": ["restaurant", "fast food", "coffee", "starbucks", "mcdonalds"],
+            "Groceries": ["supermarket", "grocery", "whole foods", "trader joe's"],
+            "Entertainment": ["netflix", "hulu", "spotify", "movie", "concert"],
+            "Bills": ["utility", "electric", "gas", "water", "phone"],
+            "Shopping": ["amazon", "target", "walmart", "mall"]
+        };
 
-        // 🛠️ Build a more dynamic OpenAI prompt
+        const categorizedTransactions = {};
+        transactions.forEach(tx => {
+            for (let [category, keywords] of Object.entries(categories)) {
+                if (keywords.some(keyword => tx.description?.toLowerCase().includes(keyword))) {
+                    categorizedTransactions[category] = (categorizedTransactions[category] || 0) + Math.abs(tx.amount);
+                }
+            }
+        });
+
+        // 🔥 Build dynamic prompt based on user message
         let prompt;
-        if (filteredTransactions.length > 0) {
-            prompt = `The user asked: "${message}". Based on their transactions, here are the most relevant transactions:\n\n${JSON.stringify(filteredTransactions)}\n\nProvide an analysis of these transactions.`;
-        } else {
-            prompt = `The user asked: "${message}". However, no specific transactions match the request. Provide insights based on all transactions: \n\n${JSON.stringify(transactions)}`;
+        
+        if (message.toLowerCase().includes("spending") || message.toLowerCase().includes("categories")) {
+            prompt = `The user asked: "${message}". Based on their transactions, here is a summary of spending by category: 
+            
+            ${JSON.stringify(categorizedTransactions, null, 2)}
+
+            Provide insights and trends on their spending.`;
+        } 
+        else if (message.toLowerCase().includes("credit card")) {
+            const creditTransactions = transactions.filter(tx => tx.account_type === "credit_card");
+            const totalCreditBalance = creditTransactions.reduce((sum, tx) => sum + tx.amount, 0);
+
+            prompt = `The user asked: "${message}". Based on their credit card transactions, their total outstanding balance is $${totalCreditBalance}. 
+            
+            Provide insights on whether their debt is increasing or decreasing and how they can manage it effectively.`;
+        }
+        else if (message.toLowerCase().includes("deposit") || message.toLowerCase().includes("savings")) {
+            const depositTransactions = transactions.filter(tx => tx.amount > 0);
+            const totalDeposits = depositTransactions.reduce((sum, tx) => sum + tx.amount, 0);
+
+            prompt = `The user asked: "${message}". They have deposited a total of $${totalDeposits} into their accounts in the last period. 
+            
+            Provide insights on their saving patterns and suggest ways to improve.`;
+        }
+        else if (message.toLowerCase().includes("overdraft") || message.toLowerCase().includes("risk")) {
+            const checkingTransactions = transactions.filter(tx => tx.account_type === "checking");
+            const totalCheckingBalance = checkingTransactions.reduce((sum, tx) => sum + tx.amount, 0);
+            const futurePayments = transactions.filter(tx => tx.scheduled && tx.amount < 0);
+            const projectedBalance = totalCheckingBalance + futurePayments.reduce((sum, tx) => sum + tx.amount, 0);
+
+            prompt = `The user asked: "${message}". Their current checking balance is $${totalCheckingBalance}. 
+            
+            Based on upcoming scheduled payments, their projected balance will be $${projectedBalance}. 
+
+            Provide insights on whether they are at risk of overdraft and suggest strategies to prevent it.`;
+        }
+        else {
+            prompt = `The user asked: "${message}". However, no specific transactions match the request. Provide general financial insights based on their spending patterns.`;
         }
 
-        // 🔥 Call OpenAI API with GPT-4o
+        // 🔥 Call OpenAI API
         const openAIResponse = await axios.post('https://api.openai.com/v1/chat/completions', {
             model: process.env.OPENAI_MODEL || 'gpt-4o',
             messages: [{ role: 'system', content: prompt }]
@@ -95,43 +138,12 @@ app.post('/assistant', async (req, res) => {
                 'Content-Type': 'application/json'
             }
         });
-
-        if (!openAIResponse || !openAIResponse.data) {
-            console.error("❌ OpenAI API did not return a valid response.");
-            return res.status(500).json({ error: "Failed to get response from OpenAI" });
-        }
 
         console.log("🤖 OpenAI Response:", openAIResponse.data);
         res.json(openAIResponse.data);
 
     } catch (error) {
         console.error("❌ Error processing /assistant:", error);
-        res.status(500).json({ error: 'Internal server error' });
-    }
-});
-
-// 🔹 Analyze Transactions
-app.post('/analyze', async (req, res) => {
-    try {
-        const { transactions } = req.body;
-        if (!transactions || transactions.length === 0) {
-            return res.status(400).json({ error: 'No transactions provided' });
-        }
-
-        const prompt = `Analyze the following transactions and provide insights: ${JSON.stringify(transactions)}`;
-        const openAIResponse = await axios.post('https://api.openai.com/v1/chat/completions', {
-            model: process.env.OPENAI_MODEL || 'gpt-4o',
-            messages: [{ role: 'system', content: prompt }]
-        }, {
-            headers: { 
-                'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
-                'Content-Type': 'application/json'
-            }
-        });
-
-        res.json(openAIResponse.data);
-    } catch (error) {
-        console.error('❌ Error analyzing transactions:', error);
         res.status(500).json({ error: 'Internal server error' });
     }
 });
