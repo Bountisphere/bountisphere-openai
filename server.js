@@ -54,9 +54,25 @@ app.post('/assistant', async (req, res) => {
         console.log("💬 Message:", message);
 
         // Get today's date
-        const today = new Date().toISOString().split("T")[0]; // YYYY-MM-DD format
+        const today = new Date();
+        const todayString = today.toISOString().split("T")[0]; // YYYY-MM-DD format
 
-        // Fetch latest transactions from Bubble
+        // Helper function to calculate date ranges
+        function getDateMonthsAgo(months) {
+            let pastDate = new Date();
+            pastDate.setMonth(pastDate.getMonth() - months);
+            return pastDate.toISOString().split("T")[0];
+        }
+
+        // Determine if the query is time-based (e.g., "last 6 months")
+        let startDate = null;
+        if (message.toLowerCase().includes("last month")) {
+            startDate = getDateMonthsAgo(1);
+        } else if (message.toLowerCase().includes("last 6 months")) {
+            startDate = getDateMonthsAgo(6);
+        }
+
+        // Fetch transactions from Bubble
         const bubbleURL = `${process.env.BUBBLE_API_URL}/transactions?constraints=[{"key":"Created By","constraint_type":"equals","value":"${user_unique_id}"}]`;
         console.log("🌍 Fetching transactions from:", bubbleURL);
 
@@ -64,12 +80,17 @@ app.post('/assistant', async (req, res) => {
             headers: { 'Authorization': `Bearer ${process.env.BUBBLE_API_KEY}` }
         });
 
-        const transactions = response.data?.response?.results || [];
-        console.log("✅ Transactions received:", transactions);
+        let transactions = response.data?.response?.results || [];
+        console.log("✅ Transactions received:", transactions.length);
 
         // 🛑 Check if there are transactions before calling OpenAI
         if (transactions.length === 0) {
             return res.json({ message: "No transactions found for this user." });
+        }
+
+        // Filter transactions by date range if requested
+        if (startDate) {
+            transactions = transactions.filter(tx => tx.date >= startDate && tx.date <= todayString);
         }
 
         // 🛠️ Categorize Transactions
@@ -91,12 +112,10 @@ app.post('/assistant', async (req, res) => {
             }
         });
 
-        // 🛠️ Detect Recurring Transactions
-        const recurringTransactions = transactions.filter(tx => 
-            transactions.filter(t => t.description === tx.description).length > 3
-        );
+        // 🛠️ Summarize Transactions
+        let totalAmount = transactions.reduce((sum, tx) => sum + Math.abs(tx.amount), 0);
 
-        // 🛠️ Financial Query Matching
+        // 🛠️ Build Prompt for OpenAI
         let prompt;
         if (message.toLowerCase().includes("spend") || 
             message.toLowerCase().includes("transaction") || 
@@ -107,24 +126,22 @@ app.post('/assistant', async (req, res) => {
             message.toLowerCase().includes("interest") ||
             message.toLowerCase().includes("fees")) {
 
-            // 🛠️ Build Enhanced Financial Analysis Prompt
-            prompt = `Today's date is ${today}. The user asked: "${message}". Based on their transactions, here is the analysis:
+            prompt = `Today's date is ${todayString}. The user asked: "${message}". Based on their transactions, here is the analysis:
 
             📊 **Categorized Spending Summary**
             ${JSON.stringify(categorizedTransactions, null, 2)}
 
-            🔁 **Recurring Transactions Detected**
-            ${JSON.stringify(recurringTransactions, null, 2)}
+            💰 **Total Spending in Time Period:** $${totalAmount.toFixed(2)}
 
-            🔥 **Spending Trends**
-            Analyze if the user's spending in any category is increasing or decreasing. Provide insights and suggestions.`;
+            🔍 **Transaction Breakdown**
+            ${JSON.stringify(transactions.slice(0, 5), null, 2)}
 
+            Provide financial insights based on this data.`;
         } else {
-            // Non-financial questions get direct responses
-            prompt = `Today's date is ${today}. The user asked: "${message}". Respond only to their question without adding any additional transaction details.`;
+            prompt = `Today's date is ${todayString}. The user asked: "${message}". Respond only to their question without adding any additional transaction details.`;
         }
 
-        // 🔥 Call OpenAI API with GPT-4o
+        // 🔥 Call OpenAI API
         const openAIResponse = await axios.post('https://api.openai.com/v1/chat/completions', {
             model: process.env.OPENAI_MODEL || 'gpt-4o',
             messages: [{ role: 'system', content: prompt }]
@@ -134,11 +151,6 @@ app.post('/assistant', async (req, res) => {
                 'Content-Type': 'application/json'
             }
         });
-
-        if (!openAIResponse || !openAIResponse.data) {
-            console.error("❌ OpenAI API did not return a valid response.");
-            return res.status(500).json({ error: "Failed to get response from OpenAI" });
-        }
 
         console.log("🤖 OpenAI Response:", openAIResponse.data);
         res.json(openAIResponse.data);
