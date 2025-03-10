@@ -56,7 +56,7 @@ app.post('/assistant', async (req, res) => {
         console.log("📌 Thread ID:", threadId);
         console.log("📌 Account ID:", accountId);
 
-          // Get today's date
+        // Get today's date
         const today = new Date().toISOString().split("T")[0]; // YYYY-MM-DD format
 
         // Fetch latest transactions from Bubble
@@ -70,41 +70,36 @@ app.post('/assistant', async (req, res) => {
         const transactions = response.data?.response?.results || [];
         console.log("✅ Transactions received:", transactions);
 
-        // 🛑 Check if there are transactions before calling OpenAI
         if (transactions.length === 0) {
             return res.json({ message: "No transactions found for this user." });
         }
 
-        // 🛠️ Filter transactions based on the user query (e.g., "Whole Foods")
+        // 🛠️ Filter transactions based on the user query
         const filteredTransactions = transactions.filter(tx => 
-            tx.description && tx.description.toLowerCase().includes(message.toLowerCase())
+            (tx.description && tx.description.toLowerCase().includes(message.toLowerCase())) ||
+            (tx.category && tx.category.toLowerCase().includes(message.toLowerCase()))
         );
 
-        // 🛠️ Build a more dynamic OpenAI prompt
+        // 🛠️ Build OpenAI prompt dynamically
         let prompt;
-
-    // If the user is asking about transactions, include transaction data
-    if (message.toLowerCase().includes("spend") || 
-        message.toLowerCase().includes("transaction") || 
-        message.toLowerCase().includes("budget") || 
-        message.toLowerCase().includes("expense") || 
-        message.toLowerCase().includes("bill") ||
-        message.toLowerCase().includes("balance")) {
-
-    if (filteredTransactions.length > 0) {
-        prompt = `Today's date is ${today}. The user asked: "${message}". Based on their transactions, here are the most relevant transactions:\n\n${JSON.stringify(filteredTransactions)}\n\nProvide an analysis of these transactions.`;
-    } else {
-        prompt = `Today's date is ${today}. The user asked: "${message}". However, no specific transactions match the request. Provide insights based on all transactions: \n\n${JSON.stringify(transactions)}`;
-    }
-} else {
-    // If the user is NOT asking about money, just respond to their question
-    prompt = `Today's date is ${today}. The user asked: "${message}". Respond only to their question without adding any additional transaction details.`;
-}
+        
+        if (["spend", "transaction", "budget", "expense", "bill", "balance"].some(word => message.toLowerCase().includes(word))) {
+            if (filteredTransactions.length > 0) {
+                prompt = `Today's date is ${today}. The user asked: "${message}". Based on their transactions, here are the most relevant transactions:\n\n${JSON.stringify(filteredTransactions)}\n\nProvide an analysis of these transactions.`;
+            } else {
+                prompt = `Today's date is ${today}. The user asked: "${message}". However, no specific transactions match the request. Provide general financial insights based on the user's spending.`;
+            }
+        } else {
+            prompt = `Today's date is ${today}. The user asked: "${message}". Respond only to their question without adding any additional transaction details.`;
+        }
 
         // 🔥 Call OpenAI API with GPT-4o
         const openAIResponse = await axios.post('https://api.openai.com/v1/chat/completions', {
             model: process.env.OPENAI_MODEL || 'gpt-4o',
-            messages: [{ role: 'system', content: prompt }]
+            messages: [
+                { role: 'system', content: "You are a financial assistant providing transaction insights." },
+                { role: 'user', content: prompt }
+            ]
         }, {
             headers: { 
                 'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
@@ -137,7 +132,10 @@ app.post('/analyze', async (req, res) => {
         const prompt = `Analyze the following transactions and provide insights: ${JSON.stringify(transactions)}`;
         const openAIResponse = await axios.post('https://api.openai.com/v1/chat/completions', {
             model: process.env.OPENAI_MODEL || 'gpt-4o',
-            messages: [{ role: 'system', content: prompt }]
+            messages: [
+                { role: 'system', content: "You are a financial assistant providing transaction insights." },
+                { role: 'user', content: prompt }
+            ]
         }, {
             headers: { 
                 'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
@@ -156,4 +154,3 @@ app.post('/analyze', async (req, res) => {
 app.listen(PORT, () => {
     console.log(`🚀 Server running on port ${PORT}`);
 });
-
