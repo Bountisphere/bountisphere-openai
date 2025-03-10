@@ -17,7 +17,7 @@ app.get('/', (req, res) => {
     res.send('Bountisphere OpenAI API is running!');
 });
 
-// 🔹 Fetch Latest Transactions from Bubble (Filtered by userId)
+// 🔹 Fetch Only **Past Transactions** (Exclude Future & Pending)
 app.post('/transactions', async (req, res) => {
     try {
         const { userId } = req.body;
@@ -26,93 +26,116 @@ app.post('/transactions', async (req, res) => {
             return res.status(400).json({ error: 'User ID is required' });
         }
 
-        const bubbleURL = `${process.env.BUBBLE_API_URL}/transactions?constraints=[{"key":"Created By","constraint_type":"equals","value":"${userId}"}]`;
+        // Get today's date in YYYY-MM-DD format
+        const today = new Date().toISOString().split("T")[0];
 
-        console.log("🌍 Fetching transactions from:", bubbleURL);
+        // Fetch only past transactions (exclude future & pending)
+        const bubbleURL = `${process.env.BUBBLE_API_URL}/transactions?constraints=[
+            {"key":"Created By","constraint_type":"equals","value":"${userId}"},
+            {"key":"Date","constraint_type":"less than","value":"${today}"},
+            {"key":"is_pending?","constraint_type":"equals","value":"false"}
+        ]`;
+
+        console.log("🌍 Fetching past transactions from:", bubbleURL);
         const response = await axios.get(bubbleURL, {
             headers: { 'Authorization': `Bearer ${process.env.BUBBLE_API_KEY}` }
         });
 
-        console.log("✅ Transactions received:", response.data);
+        console.log("✅ Past transactions received:", response.data);
         res.json(response.data);
     } catch (error) {
-        console.error("❌ Error fetching transactions:", error.message);
+        console.error("❌ Error fetching past transactions:", error.message);
         res.status(500).json({ error: 'Internal server error' });
     }
 });
 
-// 🔹 Assistant API - Handles User Queries and Fetches Transactions
+// 🔹 Fetch Only **Future Transactions** (For Upcoming Bills)
+app.post('/future-transactions', async (req, res) => {
+    try {
+        const { userId } = req.body;
+        if (!userId) {
+            return res.status(400).json({ error: 'User ID is required' });
+        }
+
+        // Get today's date
+        const today = new Date().toISOString().split("T")[0];
+
+        // Fetch only future transactions
+        const bubbleURL = `${process.env.BUBBLE_API_URL}/transactions?constraints=[
+            {"key":"Created By","constraint_type":"equals","value":"${userId}"},
+            {"key":"Date","constraint_type":"greater than","value":"${today}"}
+        ]`;
+
+        console.log("🌍 Fetching future transactions from:", bubbleURL);
+        const response = await axios.get(bubbleURL, {
+            headers: { 'Authorization': `Bearer ${process.env.BUBBLE_API_KEY}` }
+        });
+
+        console.log("✅ Future transactions received:", response.data);
+        res.json(response.data);
+    } catch (error) {
+        console.error("❌ Error fetching future transactions:", error.message);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+});
+
+// 🔹 Assistant API - Handles User Queries and Fetches Past Transactions
 app.post('/assistant', async (req, res) => {
     try {
-        const { assistantId, threadId, user_unique_id, message, accountId, version } = req.body;  
+        const { user_unique_id, message } = req.body;  
         if (!user_unique_id || !message) {
             return res.status(400).json({ error: 'Missing user ID or message' });
         }
 
         console.log("🛠 Received request at /assistant");
-        console.log("🆔 User ID:", user_unique_id);
-        console.log("💬 Message:", message);
-        console.log("📌 Assistant ID:", assistantId);
-        console.log("📌 Thread ID:", threadId);
-        console.log("📌 Account ID:", accountId);
 
         // Get today's date
-        const today = new Date().toISOString().split("T")[0]; // YYYY-MM-DD format
+        const today = new Date().toISOString().split("T")[0];
 
-        // Fetch latest transactions from Bubble
-        const bubbleURL = `${process.env.BUBBLE_API_URL}/transactions?constraints=[{"key":"Created By","constraint_type":"equals","value":"${user_unique_id}"}]`;
-        console.log("🌍 Fetching transactions from:", bubbleURL);
+        // Fetch past transactions (only completed transactions)
+        const bubbleURL = `${process.env.BUBBLE_API_URL}/transactions?constraints=[
+            {"key":"Created By","constraint_type":"equals","value":"${user_unique_id}"},
+            {"key":"Date","constraint_type":"less than","value":"${today}"},
+            {"key":"is_pending?","constraint_type":"equals","value":"false"}
+        ]`;
+        console.log("🌍 Fetching past transactions from:", bubbleURL);
 
         const response = await axios.get(bubbleURL, {
             headers: { 'Authorization': `Bearer ${process.env.BUBBLE_API_KEY}` }
         });
 
         const transactions = response.data?.response?.results || [];
-        console.log("✅ Transactions received:", transactions);
+        console.log("✅ Past transactions received:", transactions);
 
         if (transactions.length === 0) {
-            return res.json({ message: "No transactions found for this user." });
+            return res.json({ message: "No past transactions found for this user." });
         }
 
-        // 🛠️ Filter transactions based on the user query
-        const filteredTransactions = transactions.filter(tx => 
-            (tx.description && tx.description.toLowerCase().includes(message.toLowerCase())) ||
-            (tx.category && tx.category.toLowerCase().includes(message.toLowerCase()))
+        // 🛠️ Filter transactions based on user query
+        let filteredTransactions = transactions.filter(tx => 
+            tx.description.toLowerCase().includes(message.toLowerCase()) || 
+            tx.Category.toLowerCase().includes(message.toLowerCase())
         );
 
-        // 🛠️ Build OpenAI prompt dynamically
         let prompt;
-        
         if (["spend", "transaction", "budget", "expense", "bill", "balance"].some(word => message.toLowerCase().includes(word))) {
             if (filteredTransactions.length > 0) {
-                prompt = `Today's date is ${today}. The user asked: "${message}". Based on their transactions, here are the most relevant transactions:\n\n${JSON.stringify(filteredTransactions)}\n\nProvide an analysis of these transactions.`;
+                prompt = `Today's date is ${today}. The user asked: "${message}". Based on their past transactions, here are the relevant transactions:\n\n${filteredTransactions.map(tx => `- $${Math.abs(tx.Amount)} at ${tx.Description} on ${tx.Date}`).join("\n")}\n\nProvide an analysis.`;
             } else {
-                prompt = `Today's date is ${today}. The user asked: "${message}". However, no specific transactions match the request. Provide general financial insights based on the user's spending.`;
+                prompt = `Today's date is ${today}. The user asked: "${message}". However, no matching past transactions were found. Provide general financial insights based on their spending habits.`;
             }
         } else {
-            prompt = `Today's date is ${today}. The user asked: "${message}". Respond only to their question without adding any additional transaction details.`;
+            prompt = `Today's date is ${today}. The user asked: "${message}". Respond only to their question.`;
         }
 
-        // 🔥 Call OpenAI API with GPT-4o
+        // 🔥 Call OpenAI API
         const openAIResponse = await axios.post('https://api.openai.com/v1/chat/completions', {
             model: process.env.OPENAI_MODEL || 'gpt-4o',
-            messages: [
-                { role: 'system', content: "You are a financial assistant providing transaction insights." },
-                { role: 'user', content: prompt }
-            ]
+            messages: [{ role: 'system', content: "You are a financial assistant providing transaction insights." }, { role: 'user', content: prompt }]
         }, {
-            headers: { 
-                'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
-                'Content-Type': 'application/json'
-            }
+            headers: { 'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`, 'Content-Type': 'application/json' }
         });
 
-        if (!openAIResponse || !openAIResponse.data) {
-            console.error("❌ OpenAI API did not return a valid response.");
-            return res.status(500).json({ error: "Failed to get response from OpenAI" });
-        }
-
-        console.log("🤖 OpenAI Response:", openAIResponse.data);
         res.json(openAIResponse.data);
 
     } catch (error) {
@@ -129,23 +152,18 @@ app.post('/analyze', async (req, res) => {
             return res.status(400).json({ error: 'No transactions provided' });
         }
 
-        const prompt = `Analyze the following transactions and provide insights: ${JSON.stringify(transactions)}`;
+        const prompt = `Analyze the following past transactions and provide insights:\n\n${transactions.map(tx => `- $${Math.abs(tx.Amount)} at ${tx.Description} on ${tx.Date}`).join("\n")}`;
+
         const openAIResponse = await axios.post('https://api.openai.com/v1/chat/completions', {
             model: process.env.OPENAI_MODEL || 'gpt-4o',
-            messages: [
-                { role: 'system', content: "You are a financial assistant providing transaction insights." },
-                { role: 'user', content: prompt }
-            ]
+            messages: [{ role: 'system', content: "You are a financial assistant providing transaction insights." }, { role: 'user', content: prompt }]
         }, {
-            headers: { 
-                'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
-                'Content-Type': 'application/json'
-            }
+            headers: { 'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`, 'Content-Type': 'application/json' }
         });
 
         res.json(openAIResponse.data);
     } catch (error) {
-        console.error('❌ Error analyzing transactions:', error);
+        console.error("❌ Error analyzing transactions:", error);
         res.status(500).json({ error: 'Internal server error' });
     }
 });
