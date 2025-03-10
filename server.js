@@ -83,9 +83,9 @@ app.post('/assistant', async (req, res) => {
         // 🛠️ Build a more dynamic OpenAI prompt
         let prompt;
         if (filteredTransactions.length > 0) {
-            prompt = `The user asked: "${message}". Based on their transactions, here are the most relevant transactions:\n\n${JSON.stringify(filteredTransactions)}\n\nProvide an analysis of these transactions.`;
+            prompt = `Today's date is ${today}. The user asked: "${message}". Based on their transactions, here are the most relevant transactions:\n\n${JSON.stringify(filteredTransactions)}\n\nProvide an analysis of these transactions.`;
         } else {
-            prompt = `The user asked: "${message}". However, no specific transactions match the request. Provide insights based on all transactions: \n\n${JSON.stringify(transactions)}`;
+            prompt = `Today's date is ${today}. The user asked: "${message}". However, no specific transactions match the request. Provide insights based on all transactions: \n\n${JSON.stringify(transactions)}`;
         }
 
         // 🔥 Call OpenAI API with GPT-4o
