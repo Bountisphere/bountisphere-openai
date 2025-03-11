@@ -78,10 +78,10 @@ app.post('/future-transactions', async (req, res) => {
 // 🔹 Assistant API - Handles User Queries and Fetches Past Transactions
 app.post('/assistant', async (req, res) => {
     try {
-        const { assistantId, threadId, user_unique_id, message, accountId } = req.body;  
+        const { user_unique_id, message } = req.body;  
         
-        if (!assistantId || !threadId || !user_unique_id || !message || !accountId) {
-            return res.status(400).json({ error: 'Missing required fields' });
+        if (!user_unique_id || !message) {
+            return res.status(400).json({ error: 'Missing user ID or message' });
         }
 
         console.log("🛠 Received request at /assistant:", req.body);
@@ -110,15 +110,14 @@ app.post('/assistant', async (req, res) => {
             prompt = `The user asked: "${message}". No matching past transactions were found. Provide general financial advice.`;
         }
 
-        // 🔥 Call OpenAI Assistant API with `assistantId` and `threadId`
-        const openAIResponse = await axios.post(`https://api.openai.com/v1/threads/${threadId}/messages`, {
-            role: 'user',
-            content: prompt
+        // 🔥 Call OpenAI Assistant API
+        const openAIResponse = await axios.post('https://api.openai.com/v1/chat/completions', {
+            model: process.env.OPENAI_MODEL || 'gpt-4o',
+            messages: [{ role: 'system', content: "You are a financial assistant providing transaction insights." }, { role: 'user', content: prompt }]
         }, {
-            headers: {
+            headers: { 
                 'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
-                'Content-Type': 'application/json',
-                'OpenAI-Assistant-ID': assistantID
+                'Content-Type': 'application/json'
             }
         });
 
@@ -127,7 +126,7 @@ app.post('/assistant', async (req, res) => {
 
     } catch (error) {
         console.error("❌ Error processing /assistant:", error.response?.data || error.message);
-        res.status(500).json({ error: error.response?.data || 'Internal server error' });
+        res.status(500).json({ error: 'Internal server error' });
     }
 });
 
@@ -145,7 +144,10 @@ app.post('/analyze', async (req, res) => {
             model: process.env.OPENAI_MODEL || 'gpt-4o',
             messages: [{ role: 'system', content: "You are a financial assistant providing transaction insights." }, { role: 'user', content: prompt }]
         }, {
-            headers: { 'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`, 'Content-Type': 'application/json' }
+            headers: { 
+                'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
+                'Content-Type': 'application/json'
+            }
         });
 
         res.json(openAIResponse.data);
