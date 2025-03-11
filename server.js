@@ -78,9 +78,9 @@ app.post('/future-transactions', async (req, res) => {
 // 🔹 Assistant API - Handles User Queries and Fetches Past Transactions
 app.post('/assistant', async (req, res) => {
     try {
-        const { assistantID, threadId, user_unique_id, message, accountId } = req.body;  
+        const { assistantId, threadId, user_unique_id, message, accountId } = req.body;  
         
-        if (!assistantID || !threadId || !user_unique_id || !message || !accountId) {
+        if (!assistantId || !threadId || !user_unique_id || !message || !accountId) {
             return res.status(400).json({ error: 'Missing required fields' });
         }
 
@@ -110,7 +110,7 @@ app.post('/assistant', async (req, res) => {
             prompt = `The user asked: "${message}". No matching past transactions were found. Provide general financial advice.`;
         }
 
-        // 🔥 Call OpenAI Assistant API with `assistantID` and `threadId`
+        // 🔥 Call OpenAI Assistant API with `assistantId` and `threadId`
         const openAIResponse = await axios.post(`https://api.openai.com/v1/threads/${threadId}/messages`, {
             role: 'user',
             content: prompt
