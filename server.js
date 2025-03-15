@@ -14,25 +14,22 @@ app.use(express.json());
 
 // 🔹 Health Check Route
 app.get('/', (req, res) => {
-    res.send('Bountisphere OpenAI API is running!');
+    res.send('✅ Bountisphere OpenAI API is running!');
 });
 
-// 🔹 Fetch **All Past Transactions** (Excludes Future Transactions)
+// 🔹 Fetch Recent Transactions from Bubble
 app.post('/transactions', async (req, res) => {
     try {
-        const { userId } = req.body;
+        const { userId, limit = 5 } = req.body;
         if (!userId) {
             return res.status(400).json({ error: 'User ID is required' });
         }
 
-        const today = new Date().toISOString().split("T")[0]; // Today's date in YYYY-MM-DD format
-
         const bubbleURL = `${process.env.BUBBLE_API_URL}/transactions?constraints=[
-            {"key":"Created By","constraint_type":"equals","value":"${userId}"},
-            {"key":"Date","constraint_type":"less than","value":"${today}"}
-        ]`;
+            {"key":"Created By","constraint_type":"equals","value":"${userId}"}
+        ]&limit=${limit}`;
 
-        console.log("🌍 Fetching past transactions from:", bubbleURL);
+        console.log("🌍 Fetching transactions from:", bubbleURL);
 
         const response = await axios.get(bubbleURL, {
             headers: { 'Authorization': `Bearer ${process.env.BUBBLE_API_KEY}` }
@@ -40,33 +37,62 @@ app.post('/transactions', async (req, res) => {
 
         const transactions = response.data?.response?.results || [];
 
-        console.log(`✅ Retrieved ${transactions.length} past transactions`);
-        res.json(transactions);
+        // 🛠 Format transactions for OpenAI
+        const formattedTransactions = transactions.map(txn => ({
+            id: txn._id,
+            date: txn.Date,
+            amount: txn.Amount,
+            bank: txn.Bank || "Unknown Bank",
+            description: txn.Description || "No Description",
+            category: txn["Category Description"] || "Uncategorized",
+            is_pending: txn["is_pending?"] ? "Yes (Pending)" : "No"
+        }));
+
+        console.log(`✅ Retrieved ${formattedTransactions.length} transactions`);
+        res.json({ transactions: formattedTransactions });
 
     } catch (error) {
-        console.error("❌ Error fetching past transactions:", error.message);
+        console.error("❌ Error fetching transactions:", error.message);
         res.status(500).json({ error: 'Internal server error' });
     }
 });
 
-// 🔹 Analyze **All Past Transactions** with OpenAI
+// 🔹 Handle OpenAI Function Call for Transactions
+app.post('/get-transactions', async (req, res) => {
+    try {
+        const { user_id, limit } = req.body;
+        if (!user_id) {
+            return res.status(400).json({ error: 'User ID is required' });
+        }
+
+        // Call the `/transactions` endpoint to get data
+        const transactionsResponse = await axios.post(`${process.env.SERVER_URL}/transactions`, {
+            userId: user_id,
+            limit
+        });
+
+        res.json(transactionsResponse.data);
+
+    } catch (error) {
+        console.error("❌ Error fetching transactions for OpenAI:", error.message);
+        res.status(500).json({ error: 'Failed to fetch transactions' });
+    }
+});
+
+// 🔹 Analyze Transactions with OpenAI
 app.post('/analyze-transactions', async (req, res) => {
     try {
         const { userId } = req.body;
-
         if (!userId) {
             return res.status(400).json({ error: 'User ID is required' });
         }
 
-        const today = new Date().toISOString().split("T")[0];
-
-        // 🔥 Step 1: Fetch Only Past Transactions (Excludes Future Transactions)
+        // Fetch past transactions
         const bubbleURL = `${process.env.BUBBLE_API_URL}/transactions?constraints=[
-            {"key":"Created By","constraint_type":"equals","value":"${userId}"},
-            {"key":"Date","constraint_type":"less than","value":"${today}"}
+            {"key":"Created By","constraint_type":"equals","value":"${userId}"}
         ]`;
 
-        console.log("🌍 Fetching all past transactions from:", bubbleURL);
+        console.log("🌍 Fetching past transactions from:", bubbleURL);
 
         const transactionResponse = await axios.get(bubbleURL, {
             headers: { 'Authorization': `Bearer ${process.env.BUBBLE_API_KEY}` }
@@ -78,12 +104,12 @@ app.post('/analyze-transactions', async (req, res) => {
             return res.json({ message: "No past transactions found for analysis." });
         }
 
-        // 🔥 Step 2: Send Past Transactions to OpenAI for Analysis
+        // 🔥 Send Past Transactions to OpenAI for Analysis
         const openAIResponse = await axios.post(
             'https://api.openai.com/v1/responses',
             {
                 model: process.env.OPENAI_MODEL || 'gpt-4o',
-                input: `Analyze the user's past transactions up to ${today}. Identify spending trends, recurring expenses, and budgeting opportunities based on these transactions:\n\n${JSON.stringify(transactions, null, 2)}`,
+                input: `Analyze the user's past transactions. Identify spending trends, recurring expenses, and budgeting opportunities:\n\n${JSON.stringify(transactions, null, 2)}`,
                 instructions: "You are a financial assistant providing insights on spending habits, recurring charges, and budgeting strategies.",
                 temperature: 0.7
             },
