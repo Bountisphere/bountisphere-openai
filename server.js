@@ -17,81 +17,19 @@ app.get('/', (req, res) => {
     res.send('Bountisphere OpenAI API is running!');
 });
 
-// 🔹 Fetch Only **Past Transactions** (Exclude Future & Pending)
+// 🔹 Fetch **All Past Transactions** (Excludes Future Transactions)
 app.post('/transactions', async (req, res) => {
     try {
         const { userId } = req.body;
         if (!userId) {
-            console.error("🚨 Error: User ID is missing!");
             return res.status(400).json({ error: 'User ID is required' });
         }
 
-        const today = new Date().toISOString().split("T")[0];
+        const today = new Date().toISOString().split("T")[0]; // Today's date in YYYY-MM-DD format
 
         const bubbleURL = `${process.env.BUBBLE_API_URL}/transactions?constraints=[
             {"key":"Created By","constraint_type":"equals","value":"${userId}"},
-            {"key":"Date","constraint_type":"less than","value":"${today}"},
-            {"key":"is_pending?","constraint_type":"equals","value":"false"}
-        ]`;
-
-        console.log("🌍 Fetching past transactions from:", bubbleURL);
-        const response = await axios.get(bubbleURL, {
-            headers: { 'Authorization': `Bearer ${process.env.BUBBLE_API_KEY}` }
-        });
-
-        console.log("✅ Past transactions received:", response.data);
-        res.json(response.data);
-    } catch (error) {
-        console.error("❌ Error fetching past transactions:", error.message);
-        res.status(500).json({ error: 'Internal server error' });
-    }
-});
-
-// 🔹 Fetch Only **Future Transactions** (For Upcoming Bills)
-app.post('/future-transactions', async (req, res) => {
-    try {
-        const { userId } = req.body;
-        if (!userId) {
-            return res.status(400).json({ error: 'User ID is required' });
-        }
-
-        const today = new Date().toISOString().split("T")[0];
-
-        const bubbleURL = `${process.env.BUBBLE_API_URL}/transactions?constraints=[
-            {"key":"Created By","constraint_type":"equals","value":"${userId}"},
-            {"key":"Date","constraint_type":"greater than","value":"${today}"}
-        ]`;
-
-        console.log("🌍 Fetching future transactions from:", bubbleURL);
-        const response = await axios.get(bubbleURL, {
-            headers: { 'Authorization': `Bearer ${process.env.BUBBLE_API_KEY}` }
-        });
-
-        console.log("✅ Future transactions received:", response.data);
-        res.json(response.data);
-    } catch (error) {
-        console.error("❌ Error fetching future transactions:", error.message);
-        res.status(500).json({ error: 'Internal server error' });
-    }
-});
-
-// 🔹 Assistant API - Handles User Queries and Fetches Past Transactions
-app.post('/assistant', async (req, res) => {
-    try {
-        const { user_unique_id, message } = req.body;  
-        
-        if (!user_unique_id || !message) {
-            return res.status(400).json({ error: 'Missing user ID or message' });
-        }
-
-        console.log("🛠 Received request at /assistant:", req.body);
-
-        const today = new Date().toISOString().split("T")[0];
-
-        const bubbleURL = `${process.env.BUBBLE_API_URL}/transactions?constraints=[
-            {"key":"Created By","constraint_type":"equals","value":"${user_unique_id}"},
-            {"key":"Date","constraint_type":"less than","value":"${today}"},
-            {"key":"is_pending?","constraint_type":"equals","value":"false"}
+            {"key":"Date","constraint_type":"less than","value":"${today}"}
         ]`;
 
         console.log("🌍 Fetching past transactions from:", bubbleURL);
@@ -101,58 +39,67 @@ app.post('/assistant', async (req, res) => {
         });
 
         const transactions = response.data?.response?.results || [];
-        console.log("✅ Past transactions received:", transactions.length, "transactions");
 
-        let prompt;
-        if (transactions.length > 0) {
-            prompt = `Based on the user's past transactions, provide insights related to their question: "${message}". Transactions:\n\n${transactions.map(tx => `- $${Math.abs(tx.Amount)} at ${tx.Description} on ${tx.Date}`).join("\n")}`;
-        } else {
-            prompt = `The user asked: "${message}". No matching past transactions were found. Provide general financial advice.`;
-        }
-
-        // 🔥 Call OpenAI Assistant API
-        const openAIResponse = await axios.post('https://api.openai.com/v1/chat/completions', {
-            model: process.env.OPENAI_MODEL || 'gpt-4o',
-            messages: [{ role: 'system', content: "You are a financial assistant providing transaction insights." }, { role: 'user', content: prompt }]
-        }, {
-            headers: { 
-                'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
-                'Content-Type': 'application/json'
-            }
-        });
-
-        console.log("✅ OpenAI Response:", openAIResponse.data);
-        res.json(openAIResponse.data);
+        console.log(`✅ Retrieved ${transactions.length} past transactions`);
+        res.json(transactions);
 
     } catch (error) {
-        console.error("❌ Error processing /assistant:", error.response?.data || error.message);
+        console.error("❌ Error fetching past transactions:", error.message);
         res.status(500).json({ error: 'Internal server error' });
     }
 });
 
-// 🔹 Analyze Transactions
-app.post('/analyze', async (req, res) => {
+// 🔹 Analyze **All Past Transactions** with OpenAI
+app.post('/analyze-transactions', async (req, res) => {
     try {
-        const { transactions } = req.body;
-        if (!transactions || transactions.length === 0) {
-            return res.status(400).json({ error: 'No transactions provided' });
+        const { userId } = req.body;
+
+        if (!userId) {
+            return res.status(400).json({ error: 'User ID is required' });
         }
 
-        const prompt = `Analyze the following past transactions and provide insights:\n\n${transactions.map(tx => `- $${Math.abs(tx.Amount)} at ${tx.Description} on ${tx.Date}`).join("\n")}`;
+        const today = new Date().toISOString().split("T")[0];
 
-        const openAIResponse = await axios.post('https://api.openai.com/v1/chat/completions', {
-            model: process.env.OPENAI_MODEL || 'gpt-4o',
-            messages: [{ role: 'system', content: "You are a financial assistant providing transaction insights." }, { role: 'user', content: prompt }]
-        }, {
-            headers: { 
-                'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
-                'Content-Type': 'application/json'
-            }
+        // 🔥 Step 1: Fetch Only Past Transactions (Excludes Future Transactions)
+        const bubbleURL = `${process.env.BUBBLE_API_URL}/transactions?constraints=[
+            {"key":"Created By","constraint_type":"equals","value":"${userId}"},
+            {"key":"Date","constraint_type":"less than","value":"${today}"}
+        ]`;
+
+        console.log("🌍 Fetching all past transactions from:", bubbleURL);
+
+        const transactionResponse = await axios.get(bubbleURL, {
+            headers: { 'Authorization': `Bearer ${process.env.BUBBLE_API_KEY}` }
         });
 
+        const transactions = transactionResponse.data?.response?.results || [];
+
+        if (transactions.length === 0) {
+            return res.json({ message: "No past transactions found for analysis." });
+        }
+
+        // 🔥 Step 2: Send Past Transactions to OpenAI for Analysis
+        const openAIResponse = await axios.post(
+            'https://api.openai.com/v1/responses',
+            {
+                model: process.env.OPENAI_MODEL || 'gpt-4o',
+                input: `Analyze the user's past transactions up to ${today}. Identify spending trends, recurring expenses, and budgeting opportunities based on these transactions:\n\n${JSON.stringify(transactions, null, 2)}`,
+                instructions: "You are a financial assistant providing insights on spending habits, recurring charges, and budgeting strategies.",
+                temperature: 0.7
+            },
+            {
+                headers: {
+                    'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
+                    'Content-Type': 'application/json'
+                }
+            }
+        );
+
+        console.log("✅ OpenAI Response Received");
         res.json(openAIResponse.data);
+
     } catch (error) {
-        console.error("❌ Error analyzing transactions:", error);
+        console.error("❌ Error processing /analyze-transactions:", error.response?.data || error.message);
         res.status(500).json({ error: 'Internal server error' });
     }
 });
