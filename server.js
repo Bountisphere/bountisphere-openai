@@ -29,7 +29,8 @@ app.post('/transactions', async (req, res) => {
 
         const bubbleURL = `${process.env.BUBBLE_API_URL}/transactions?constraints=[
             {"key":"Created By","constraint_type":"equals","value":"${userId}"},
-            {"key":"Date","constraint_type":"less than","value":"${today}"}
+            {"key":"Date","constraint_type":"less than","value":"${today}"},
+            {"key":"is_pending?","constraint_type":"equals","value":"false"}
         ]`;
 
         console.log("🌍 Fetching past transactions from:", bubbleURL);
