@@ -17,7 +17,7 @@ app.get('/', (req, res) => {
     res.send('✅ Bountisphere OpenAI API is running!');
 });
 
-// 🔹 Fetch Recent Transactions from Bubble (Only Past & Non-Pending)
+// 🔹 Fetch Past Transactions (No Future, No Pending)
 app.post('/transactions', async (req, res) => {
     console.log("📥 Incoming Request Body:", req.body); // Debugging step
 
@@ -29,10 +29,10 @@ app.post('/transactions', async (req, res) => {
             return res.status(400).json({ error: 'User ID is required' });
         }
 
-        // Get today's date in YYYY-MM-DD format for filtering past transactions
+        // Get today's date in YYYY-MM-DD format
         const today = new Date().toISOString().split("T")[0];
 
-        // Bubble API URL with filters: Past transactions + Not Pending
+        // Bubble API URL: Fetch transactions that are NOT future and NOT pending
         const bubbleURL = `${process.env.BUBBLE_API_URL}/transaction?constraints=[
             {"key":"Created By","constraint_type":"equals","value":"${userId}"},
             {"key":"Date","constraint_type":"less than or equal","value":"${today}"},
@@ -68,18 +68,10 @@ app.post('/transactions', async (req, res) => {
         res.status(500).json({ error: 'Internal server error' });
     }
 });
-        console.log(`✅ Retrieved ${formattedTransactions.length} transactions`);
-        res.json({ transactions: formattedTransactions });
-
-    } catch (error) {
-        console.error("❌ Error fetching transactions:", error.message);
-        res.status(500).json({ error: 'Internal server error' });
-    }
-});
 
 // 🔹 Handle OpenAI Function Call for Transactions
 app.post('/get-transactions', async (req, res) => {
-    console.log("📥 /get-transactions Request Body:", req.body); // 🛠 Debugging step
+    console.log("📥 /get-transactions Request Body:", req.body); // Debugging step
 
     try {
         const { userId, limit } = req.body;
@@ -89,7 +81,7 @@ app.post('/get-transactions', async (req, res) => {
             return res.status(400).json({ error: 'User ID is required' });
         }
 
-        // Call the `/transactions` endpoint to get data
+        // Call the `/transactions` endpoint to get filtered data
         const transactionsResponse = await axios.post(`${process.env.SERVER_URL}/transactions`, {
             userId, // ✅ Correctly passing userId
             limit
@@ -106,7 +98,7 @@ app.post('/get-transactions', async (req, res) => {
 
 // 🔹 Analyze Transactions with OpenAI
 app.post('/analyze-transactions', async (req, res) => {
-    console.log("📥 /analyze-transactions Request Body:", req.body); // 🛠 Debugging step
+    console.log("📥 /analyze-transactions Request Body:", req.body); // Debugging step
 
     try {
         const { userId } = req.body;
@@ -117,8 +109,11 @@ app.post('/analyze-transactions', async (req, res) => {
         }
 
         // Fetch past transactions
-        const bubbleURL = `${process.env.BUBBLE_API_URL}/transactions?constraints=[
-            {"key":"Created By","constraint_type":"equals","value":"${userId}"}
+        const today = new Date().toISOString().split("T")[0];
+        const bubbleURL = `${process.env.BUBBLE_API_URL}/transaction?constraints=[
+            {"key":"Created By","constraint_type":"equals","value":"${userId}"},
+            {"key":"Date","constraint_type":"less than or equal","value":"${today}"},
+            {"key":"is_pending?","constraint_type":"equals","value":"false"}
         ]`;
 
         console.log("🌍 Fetching past transactions from:", bubbleURL);
@@ -164,5 +159,3 @@ app.post('/analyze-transactions', async (req, res) => {
 app.listen(PORT, () => {
     console.log(`🚀 Server running on port ${PORT}`);
 });
-
-
