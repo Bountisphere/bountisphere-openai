@@ -2,6 +2,7 @@
 import express from 'express';
 import axios from 'axios';
 import dotenv from 'dotenv';
+import OpenAI from 'openai';
 
 // Load environment variables
 dotenv.config();
@@ -11,6 +12,11 @@ const PORT = process.env.PORT || 3000;
 
 // Middleware to parse JSON requests
 app.use(express.json());
+
+// Initialize OpenAI client
+const openai = new OpenAI({
+    apiKey: process.env.OPENAI_API_KEY,
+});
 
 // 🔹 Health Check Route
 app.get('/', (req, res) => {
@@ -25,7 +31,7 @@ app.post('/transactions', async (req, res) => {
             return res.status(400).json({ error: 'User ID is required' });
         }
 
-        const today = new Date().toISOString().split("T")[0]; // Today's date in YYYY-MM-DD format
+        const today = new Date().toISOString().split("T")[0];
 
         const bubbleURL = `${process.env.BUBBLE_API_URL}/transactions?constraints=[
             {"key":"Created By","constraint_type":"equals","value":"${userId}"},
@@ -50,63 +56,100 @@ app.post('/transactions', async (req, res) => {
     }
 });
 
-// 🔹 Analyze **All Past Transactions** with OpenAI
-app.post('/analyze-transactions', async (req, res) => {
+// 🔹 Analyze Transactions with OpenAI **Function Calling**
+app.post('/ask-money-coach', async (req, res) => {
     try {
-        const { userId } = req.body;
+        const userQuery = req.body.query;
+        const userId = req.body.userId;
 
-        if (!userId) {
-            return res.status(400).json({ error: 'User ID is required' });
+        if (!userQuery || !userId) {
+            return res.status(400).json({ error: 'User query and user ID are required' });
         }
 
-        const today = new Date().toISOString().split("T")[0];
+        console.log("🤖 User asked:", userQuery);
 
-        // 🔥 Step 1: Fetch Only Past Transactions (Excludes Future Transactions)
-        const bubbleURL = `${process.env.BUBBLE_API_URL}/transactions?constraints=[
-            {"key":"Created By","constraint_type":"equals","value":"${userId}"},
-            {"key":"Date","constraint_type":"less than","value":"${today}"}
-        ]`;
-
-        console.log("🌍 Fetching all past transactions from:", bubbleURL);
-
-        const transactionResponse = await axios.get(bubbleURL, {
-            headers: { 'Authorization': `Bearer ${process.env.BUBBLE_API_KEY}` }
+        const response = await openai.chat.completions.create({
+            model: process.env.OPENAI_MODEL || "gpt-4-turbo",
+            messages: [{ role: "user", content: userQuery }],
+            functions: [
+                {
+                    name: "get_transactions",
+                    description: "Retrieve user transactions based on filters such as date, category, or amount.",
+                    parameters: {
+                        type: "object",
+                        properties: {
+                            user_id: { type: "string", description: "User's unique ID in Bubble." },
+                            date_range: { type: "string", description: "Timeframe for transactions, e.g., 'last month' or '2024-02-01 to 2024-02-29'." },
+                            category: { type: "string", description: "Transaction category, e.g., 'Groceries'." },
+                            min_amount: { type: "number", description: "Minimum transaction amount." },
+                            max_amount: { type: "number", description: "Maximum transaction amount." }
+                        },
+                        required: ["user_id"]
+                    }
+                }
+            ]
         });
 
-        const transactions = transactionResponse.data?.response?.results || [];
+        if (response.choices[0].message.function_call) {
+            const functionName = response.choices[0].message.function_call.name;
+            const functionArgs = JSON.parse(response.choices[0].message.function_call.arguments);
 
-        if (transactions.length === 0) {
-            return res.json({ message: "No past transactions found for analysis." });
+            if (functionName === "get_transactions") {
+                const transactions = await getTransactions(functionArgs);
+                return res.json({ response: transactions });
+            }
         }
 
-        // 🔥 Step 2: Send Past Transactions to OpenAI for Analysis
-        const openAIResponse = await axios.post(
-            'https://api.openai.com/v1/responses',
-            {
-                model: process.env.OPENAI_MODEL || 'gpt-4o',
-                input: `Analyze the user's past transactions up to ${today}. Identify spending trends, recurring expenses, and budgeting opportunities based on these transactions:\n\n${JSON.stringify(transactions, null, 2)}`,
-                instructions: "You are a financial assistant providing insights on spending habits, recurring charges, and budgeting strategies.",
-                temperature: 0.7
-            },
-            {
-                headers: {
-                    'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
-                    'Content-Type': 'application/json'
-                }
-            }
-        );
-
-        console.log("✅ OpenAI Response Received");
-        res.json(openAIResponse.data);
+        res.json({ response: response.choices[0].message.content });
 
     } catch (error) {
-        console.error("❌ Error processing /analyze-transactions:", error.response?.data || error.message);
+        console.error("❌ Error processing AI request:", error.message);
         res.status(500).json({ error: 'Internal server error' });
     }
 });
+
+// 🔹 Fetch Transactions Based on Filters (Used in Function Calling)
+async function getTransactions({ user_id, date_range, category, min_amount, max_amount }) {
+    let constraints = [
+        { key: "Created By", constraint_type: "equals", value: user_id }
+    ];
+
+    if (date_range) {
+        const [startDate, endDate] = date_range.split(" to ");
+        constraints.push(
+            { key: "Date", constraint_type: "greater than", value: startDate },
+            { key: "Date", constraint_type: "less than", value: endDate }
+        );
+    }
+
+    if (category) {
+        constraints.push({ key: "Category", constraint_type: "equals", value: category });
+    }
+
+    if (min_amount) {
+        constraints.push({ key: "Amount", constraint_type: "greater than", value: min_amount });
+    }
+
+    if (max_amount) {
+        constraints.push({ key: "Amount", constraint_type: "less than", value: max_amount });
+    }
+
+    const bubbleURL = `${process.env.BUBBLE_API_URL}/transactions?constraints=${JSON.stringify(constraints)}`;
+
+    console.log("🔍 Fetching transactions with filters:", constraints);
+
+    try {
+        const response = await axios.get(bubbleURL, {
+            headers: { Authorization: `Bearer ${process.env.BUBBLE_API_KEY}` }
+        });
+        return response.data.response.results;
+    } catch (error) {
+        console.error("❌ Error fetching filtered transactions:", error.message);
+        return [];
+    }
+}
 
 // 🔹 Start the Server
 app.listen(PORT, () => {
     console.log(`🚀 Server running on port ${PORT}`);
 });
-
