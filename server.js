@@ -17,9 +17,9 @@ app.get('/', (req, res) => {
     res.send('✅ Bountisphere OpenAI API is running!');
 });
 
-// 🔹 Fetch Recent Transactions from Bubble
+// 🔹 Fetch Recent Transactions from Bubble (Only Past & Non-Pending)
 app.post('/transactions', async (req, res) => {
-    console.log("📥 Incoming Request Body:", req.body); // 🛠 Debugging step
+    console.log("📥 Incoming Request Body:", req.body); // Debugging step
 
     try {
         const { userId, limit = 5 } = req.body;
@@ -29,8 +29,14 @@ app.post('/transactions', async (req, res) => {
             return res.status(400).json({ error: 'User ID is required' });
         }
 
-        const bubbleURL = `${process.env.BUBBLE_API_URL}/transactions?constraints=[
-            {"key":"Created By","constraint_type":"equals","value":"${userId}"}
+        // Get today's date in YYYY-MM-DD format for filtering past transactions
+        const today = new Date().toISOString().split("T")[0];
+
+        // Bubble API URL with filters: Past transactions + Not Pending
+        const bubbleURL = `${process.env.BUBBLE_API_URL}/transaction?constraints=[
+            {"key":"Created By","constraint_type":"equals","value":"${userId}"},
+            {"key":"Date","constraint_type":"less than or equal","value":"${today}"},
+            {"key":"is_pending?","constraint_type":"equals","value":"false"}
         ]&limit=${limit}`;
 
         console.log("🌍 Fetching transactions from:", bubbleURL);
@@ -39,11 +45,11 @@ app.post('/transactions', async (req, res) => {
             headers: { 'Authorization': `Bearer ${process.env.BUBBLE_API_KEY}` }
         });
 
-        console.log("📥 Bubble Response:", response.data); // 🛠 Debugging step
+        console.log("📥 Bubble Response:", response.data); // Debugging step
 
         const transactions = response.data?.response?.results || [];
 
-        // 🛠 Format transactions for OpenAI
+        // Format transactions for OpenAI
         const formattedTransactions = transactions.map(txn => ({
             id: txn._id,
             date: txn.Date,
@@ -54,6 +60,14 @@ app.post('/transactions', async (req, res) => {
             is_pending: txn["is_pending?"] ? "Yes (Pending)" : "No"
         }));
 
+        console.log(`✅ Retrieved ${formattedTransactions.length} transactions`);
+        res.json({ transactions: formattedTransactions });
+
+    } catch (error) {
+        console.error("❌ Error fetching transactions:", error.message);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+});
         console.log(`✅ Retrieved ${formattedTransactions.length} transactions`);
         res.json({ transactions: formattedTransactions });
 
