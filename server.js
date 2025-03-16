@@ -17,7 +17,7 @@ app.get('/', (req, res) => {
     res.send('✅ Bountisphere OpenAI API is running!');
 });
 
-// 🔹 Fetch Past Transactions from Bubble (No Future, No Pending)
+// 🔹 Fetch Recent Transactions from Bubble
 app.post('/transactions', async (req, res) => {
     console.log("📥 Incoming Request Body:", req.body); // 🛠 Debugging step
 
@@ -29,14 +29,8 @@ app.post('/transactions', async (req, res) => {
             return res.status(400).json({ error: 'User ID is required' });
         }
 
-        // Get today's date in Bubble-compatible format (YYYY-MM-DD)
-        const todayDate = new Date().toISOString().split("T")[0];
-
-        // Bubble API Query: Only Past Transactions (No Future, No Pending)
         const bubbleURL = `${process.env.BUBBLE_API_URL}/transactions?constraints=[
-            {"key":"Created By","constraint_type":"equals","value":"${userId}"},
-            {"key":"Date","constraint_type":"less than or equal","value":"${todayDate}"},
-            {"key":"is_pending?","constraint_type":"equals","value":"false"}
+            {"key":"Created By","constraint_type":"equals","value":"${userId}"}
         ]&limit=${limit}`;
 
         console.log("🌍 Fetching transactions from:", bubbleURL);
@@ -56,7 +50,8 @@ app.post('/transactions', async (req, res) => {
             amount: txn.Amount,
             bank: txn.Bank || "Unknown Bank",
             description: txn.Description || "No Description",
-            category: txn["Category Description"] || "Uncategorized"
+            category: txn["Category Description"] || "Uncategorized",
+            is_pending: txn["is_pending?"] ? "Yes (Pending)" : "No"
         }));
 
         console.log(`✅ Retrieved ${formattedTransactions.length} transactions`);
@@ -82,24 +77,12 @@ app.post('/get-transactions', async (req, res) => {
 
         // Call the `/transactions` endpoint to get data
         const transactionsResponse = await axios.post(`${process.env.SERVER_URL}/transactions`, {
-            userId,
+            userId, // ✅ Correctly passing userId
             limit
         });
 
         console.log("✅ Transactions successfully retrieved for OpenAI.");
-        
-        // 🔹 OpenAI function call structured response
-        res.json({
-            "tool_calls": [
-                {
-                    "type": "function",
-                    "name": "get_transactions",
-                    "output": {
-                        "transactions": transactionsResponse.data.transactions
-                    }
-                }
-            ]
-        });
+        res.json(transactionsResponse.data);
 
     } catch (error) {
         console.error("❌ Error fetching transactions for OpenAI:", error.message);
@@ -107,7 +90,65 @@ app.post('/get-transactions', async (req, res) => {
     }
 });
 
+// 🔹 Analyze Transactions with OpenAI
+app.post('/analyze-transactions', async (req, res) => {
+    console.log("📥 /analyze-transactions Request Body:", req.body); // 🛠 Debugging step
+
+    try {
+        const { userId } = req.body;
+        
+        if (!userId) {
+            console.error("❌ Missing userId for analysis.");
+            return res.status(400).json({ error: 'User ID is required' });
+        }
+
+        // Fetch past transactions
+        const bubbleURL = `${process.env.BUBBLE_API_URL}/transactions?constraints=[
+            {"key":"Created By","constraint_type":"equals","value":"${userId}"}
+        ]`;
+
+        console.log("🌍 Fetching past transactions from:", bubbleURL);
+
+        const transactionResponse = await axios.get(bubbleURL, {
+            headers: { 'Authorization': `Bearer ${process.env.BUBBLE_API_KEY}` }
+        });
+
+        const transactions = transactionResponse.data?.response?.results || [];
+
+        if (transactions.length === 0) {
+            return res.json({ message: "No past transactions found for analysis." });
+        }
+
+        // 🔥 Send Past Transactions to OpenAI for Analysis
+        const openAIResponse = await axios.post(
+            'https://api.openai.com/v1/responses',
+            {
+                model: process.env.OPENAI_MODEL || 'gpt-4o',
+                input: `Analyze the user's past transactions. Identify spending trends, recurring expenses, and budgeting opportunities:\n\n${JSON.stringify(transactions, null, 2)}`,
+                instructions: "You are a financial assistant providing insights on spending habits, recurring charges, and budgeting strategies.",
+                temperature: 0.7,
+                userId  // ✅ Now correctly included
+            },
+            {
+                headers: {
+                    'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
+                    'Content-Type': 'application/json'
+                }
+            }
+        );
+
+        console.log("✅ OpenAI Response Received");
+        res.json(openAIResponse.data);
+
+    } catch (error) {
+        console.error("❌ Error processing /analyze-transactions:", error.response?.data || error.message);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+});
+
 // 🔹 Start the Server
 app.listen(PORT, () => {
     console.log(`🚀 Server running on port ${PORT}`);
 });
+
+
