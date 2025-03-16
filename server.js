@@ -19,9 +19,13 @@ app.get('/', (req, res) => {
 
 // 🔹 Fetch Recent Transactions from Bubble
 app.post('/transactions', async (req, res) => {
+    console.log("📥 Incoming Request Body:", req.body); // 🛠 Debugging step
+
     try {
         const { userId, limit = 5 } = req.body;
+        
         if (!userId) {
+            console.error("❌ Missing userId in request.");
             return res.status(400).json({ error: 'User ID is required' });
         }
 
@@ -34,6 +38,8 @@ app.post('/transactions', async (req, res) => {
         const response = await axios.get(bubbleURL, {
             headers: { 'Authorization': `Bearer ${process.env.BUBBLE_API_KEY}` }
         });
+
+        console.log("📥 Bubble Response:", response.data); // 🛠 Debugging step
 
         const transactions = response.data?.response?.results || [];
 
@@ -59,18 +65,23 @@ app.post('/transactions', async (req, res) => {
 
 // 🔹 Handle OpenAI Function Call for Transactions
 app.post('/get-transactions', async (req, res) => {
+    console.log("📥 /get-transactions Request Body:", req.body); // 🛠 Debugging step
+
     try {
-        const { user_id, limit } = req.body;
-        if (!user_id) {
+        const { userId, limit } = req.body;
+        
+        if (!userId) {
+            console.error("❌ Missing userId in OpenAI request.");
             return res.status(400).json({ error: 'User ID is required' });
         }
 
         // Call the `/transactions` endpoint to get data
         const transactionsResponse = await axios.post(`${process.env.SERVER_URL}/transactions`, {
-            userId: user_id,
+            userId, // ✅ Correctly passing userId
             limit
         });
 
+        console.log("✅ Transactions successfully retrieved for OpenAI.");
         res.json(transactionsResponse.data);
 
     } catch (error) {
@@ -81,9 +92,13 @@ app.post('/get-transactions', async (req, res) => {
 
 // 🔹 Analyze Transactions with OpenAI
 app.post('/analyze-transactions', async (req, res) => {
+    console.log("📥 /analyze-transactions Request Body:", req.body); // 🛠 Debugging step
+
     try {
         const { userId } = req.body;
+        
         if (!userId) {
+            console.error("❌ Missing userId for analysis.");
             return res.status(400).json({ error: 'User ID is required' });
         }
 
@@ -111,7 +126,8 @@ app.post('/analyze-transactions', async (req, res) => {
                 model: process.env.OPENAI_MODEL || 'gpt-4o',
                 input: `Analyze the user's past transactions. Identify spending trends, recurring expenses, and budgeting opportunities:\n\n${JSON.stringify(transactions, null, 2)}`,
                 instructions: "You are a financial assistant providing insights on spending habits, recurring charges, and budgeting strategies.",
-                temperature: 0.7
+                temperature: 0.7,
+                userId  // ✅ Now correctly included
             },
             {
                 headers: {
