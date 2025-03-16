@@ -33,7 +33,7 @@ app.post('/transactions', async (req, res) => {
         const today = new Date().toISOString().split("T")[0];
 
         // Bubble API URL: Fetch transactions that are NOT future and NOT pending
-        const bubbleURL = `${process.env.BUBBLE_API_URL}/transaction?constraints=[
+        const bubbleURL = `${process.env.BUBBLE_API_URL}/transactions?constraints=[
             {"key":"Created By","constraint_type":"equals","value":"${userId}"},
             {"key":"Date","constraint_type":"less than or equal","value":"${today}"},
             {"key":"is_pending?","constraint_type":"equals","value":"false"}
