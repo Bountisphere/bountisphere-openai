@@ -180,13 +180,17 @@ app.post('/assistant', async (req, res) => {
     try {
         const { model, tools, input, instructions, userId } = req.body;
 
+        console.log("📥 Received request with userId:", userId);
+
         // Validate user ID
         if (!userId) {
+            console.error("❌ No userId provided in request");
             return res.status(400).json({ error: 'User ID is required' });
         }
 
         // Validate input
         if (!input) {
+            console.error("❌ No input provided in request");
             return res.status(400).json({ error: 'Input is required' });
         }
 
@@ -197,72 +201,90 @@ app.post('/assistant', async (req, res) => {
 
         console.log("🔍 Verifying user:", userId);
 
-        const userResponse = await axios.get(userURL, {
-            headers: { 'Authorization': `Bearer ${process.env.BUBBLE_API_KEY}` }
-        });
+        try {
+            const userResponse = await axios.get(userURL, {
+                headers: { 'Authorization': `Bearer ${process.env.BUBBLE_API_KEY}` }
+            });
 
-        if (!userResponse.data?.response?.results?.length) {
-            return res.status(404).json({ error: 'User not found' });
-        }
-
-        // 🔥 Step 2: Create the response
-        const response = await openai.responses.create({
-            model: model || 'gpt-4',
-            tools: tools || [],
-            input: input,
-            instructions: instructions || "You are the Bountisphere AI Money Coach. Always be aware of the real date when answering questions. If the user asks about their transactions, call the 'get_transactions' function to retrieve their financial data.",
-            metadata: {
-                userId: userId,
-                userEmail: userResponse.data.response.results[0].email // Store user email for context
+            if (!userResponse.data?.response?.results?.length) {
+                console.error("❌ User not found in Bubble:", userId);
+                return res.status(404).json({ error: 'User not found' });
             }
-        });
 
-        // 🔥 Step 3: Handle tool calls if any
-        if (response.output && response.output.length > 0) {
-            for (const output of response.output) {
-                if (output.type === 'function_call' && output.name === 'get_transactions') {
-                    const args = JSON.parse(output.arguments);
-                    // Ensure we're using the validated user ID
-                    args.userId = userId;
-                    const limit = args.limit || 5;
+            console.log("✅ User verified:", userId);
 
-                    // Fetch transactions from Bubble with user-specific constraints
-                    const bubbleURL = `${process.env.BUBBLE_API_URL}/transactions?constraints=[
-                        {"key":"Created By","constraint_type":"equals","value":"${userId}"},
-                        {"key":"is_pending?","constraint_type":"equals","value":"false"}
-                    ]&limit=${limit}&sort_field=Date&sort_direction=descending`;
+            // 🔥 Step 2: Create the response
+            const response = await openai.responses.create({
+                model: model || 'gpt-4',
+                tools: tools || [],
+                input: input,
+                instructions: instructions || "You are the Bountisphere AI Money Coach. Always be aware of the real date when answering questions. If the user asks about their transactions, call the 'get_transactions' function to retrieve their financial data.",
+                metadata: {
+                    userId: userId,
+                    userEmail: userResponse.data.response.results[0].email
+                }
+            });
 
-                    console.log("🌍 Fetching transactions for user:", userId);
+            console.log("✅ Initial OpenAI response received");
 
-                    const transactionResponse = await axios.get(bubbleURL, {
-                        headers: { 'Authorization': `Bearer ${process.env.BUBBLE_API_KEY}` }
-                    });
+            // 🔥 Step 3: Handle function calls if any
+            if (response.output && response.output.length > 0) {
+                for (const output of response.output) {
+                    if (output.type === 'function_call' && output.name === 'get_transactions') {
+                        const args = JSON.parse(output.arguments);
+                        // Replace any placeholder user ID with the actual user ID
+                        args.userId = userId;
+                        const limit = args.limit || 5;
 
-                    const transactions = transactionResponse.data?.response?.results || [];
+                        // Fetch transactions from Bubble with user-specific constraints
+                        const bubbleURL = `${process.env.BUBBLE_API_URL}/transactions?constraints=[
+                            {"key":"Created By","constraint_type":"equals","value":"${userId}"},
+                            {"key":"is_pending?","constraint_type":"equals","value":"false"}
+                        ]&limit=${limit}&sort_field=Date&sort_direction=descending`;
 
-                    // Send the transactions back to OpenAI for analysis
-                    const followUpResponse = await openai.responses.create({
-                        model: model || 'gpt-4',
-                        input: input,
-                        instructions: instructions || "You are the Bountisphere AI Money Coach. Always be aware of the real date when answering questions.",
-                        metadata: {
-                            userId: userId,
-                            userEmail: userResponse.data.response.results[0].email,
-                            transactions: transactions
-                        }
-                    });
+                        console.log("🌍 Fetching transactions for user:", userId);
 
-                    return res.json(followUpResponse);
+                        const transactionResponse = await axios.get(bubbleURL, {
+                            headers: { 'Authorization': `Bearer ${process.env.BUBBLE_API_KEY}` }
+                        });
+
+                        const transactions = transactionResponse.data?.response?.results || [];
+
+                        // Create a new response with the transaction data
+                        const followUpResponse = await openai.responses.create({
+                            model: model || 'gpt-4',
+                            input: input,
+                            instructions: instructions || "You are the Bountisphere AI Money Coach. Always be aware of the real date when answering questions.",
+                            metadata: {
+                                userId: userId,
+                                userEmail: userResponse.data.response.results[0].email,
+                                transactions: transactions
+                            },
+                            previous_response_id: response.id
+                        });
+
+                        return res.json(followUpResponse);
+                    }
                 }
             }
-        }
 
-        // If no tool calls were made, return the initial response
-        res.json(response);
+            // If no function calls were made, return the initial response
+            res.json(response);
+
+        } catch (bubbleError) {
+            console.error("❌ Error calling Bubble API:", bubbleError.response?.data || bubbleError.message);
+            return res.status(500).json({ 
+                error: 'Error accessing Bubble API',
+                details: bubbleError.response?.data || bubbleError.message
+            });
+        }
 
     } catch (error) {
         console.error("❌ Error processing response request:", error.response?.data || error.message);
-        res.status(500).json({ error: 'Internal server error' });
+        return res.status(500).json({ 
+            error: 'Internal server error',
+            details: error.response?.data || error.message
+        });
     }
 });
 
