@@ -178,7 +178,8 @@ app.post('/ask-question', async (req, res) => {
 // 🔹 OpenAI Responses API Endpoint
 app.post('/assistant', async (req, res) => {
     try {
-        const { model, tools, input, instructions, userId } = req.body;
+        const { model, tools, input, instructions } = req.body;
+        const userId = req.query.userId; // Get userId from query parameters
 
         console.log("📥 Received request with userId:", userId);
 
@@ -231,16 +232,17 @@ app.post('/assistant', async (req, res) => {
             if (response.output && response.output.length > 0) {
                 for (const output of response.output) {
                     if (output.type === 'function_call' && output.name === 'get_transactions') {
-                        const args = JSON.parse(output.arguments);
-                        // Replace any placeholder user ID with the actual user ID
-                        args.userId = userId;
-                        const limit = args.limit || 5;
+                        // Always use the actual userId from the request
+                        const args = {
+                            userId: userId,
+                            limit: 3 // Default to 3 transactions
+                        };
 
                         // Fetch transactions from Bubble with user-specific constraints
                         const bubbleURL = `${process.env.BUBBLE_API_URL}/transactions?constraints=[
                             {"key":"Created By","constraint_type":"equals","value":"${userId}"},
                             {"key":"is_pending?","constraint_type":"equals","value":"false"}
-                        ]&limit=${limit}&sort_field=Date&sort_direction=descending`;
+                        ]&limit=${args.limit}&sort_field=Date&sort_direction=descending`;
 
                         console.log("🌍 Fetching transactions for user:", userId);
 
