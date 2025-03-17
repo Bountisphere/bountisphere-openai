@@ -180,33 +180,59 @@ app.post('/assistant', async (req, res) => {
     try {
         const { model, tools, input, instructions, userId } = req.body;
 
-        if (!input || !userId) {
-            return res.status(400).json({ error: 'Input and userId are required' });
+        // Validate user ID
+        if (!userId) {
+            return res.status(400).json({ error: 'User ID is required' });
         }
 
-        // 🔥 Step 1: Create the response
+        // Validate input
+        if (!input) {
+            return res.status(400).json({ error: 'Input is required' });
+        }
+
+        // 🔥 Step 1: Verify user exists in Bubble
+        const userURL = `${process.env.BUBBLE_API_URL}/user?constraints=[
+            {"key":"_id","constraint_type":"equals","value":"${userId}"}
+        ]`;
+
+        console.log("🔍 Verifying user:", userId);
+
+        const userResponse = await axios.get(userURL, {
+            headers: { 'Authorization': `Bearer ${process.env.BUBBLE_API_KEY}` }
+        });
+
+        if (!userResponse.data?.response?.results?.length) {
+            return res.status(404).json({ error: 'User not found' });
+        }
+
+        // 🔥 Step 2: Create the response
         const response = await openai.responses.create({
             model: model || 'gpt-4',
             tools: tools || [],
             input: input,
-            instructions: instructions || "You are the Bountisphere AI Money Coach. Always be aware of the real date when answering questions.",
+            instructions: instructions || "You are the Bountisphere AI Money Coach. Always be aware of the real date when answering questions. If the user asks about their transactions, call the 'get_transactions' function to retrieve their financial data.",
             metadata: {
-                userId: userId
+                userId: userId,
+                userEmail: userResponse.data.response.results[0].email // Store user email for context
             }
         });
 
-        // 🔥 Step 2: Handle tool calls if any
-        if (response.tool_calls) {
-            for (const toolCall of response.tool_calls) {
-                if (toolCall.function.name === 'get_transactions') {
-                    const args = JSON.parse(toolCall.function.arguments);
+        // 🔥 Step 3: Handle tool calls if any
+        if (response.output && response.output.length > 0) {
+            for (const output of response.output) {
+                if (output.type === 'function_call' && output.name === 'get_transactions') {
+                    const args = JSON.parse(output.arguments);
+                    // Ensure we're using the validated user ID
+                    args.userId = userId;
                     const limit = args.limit || 5;
 
-                    // Fetch transactions from Bubble
+                    // Fetch transactions from Bubble with user-specific constraints
                     const bubbleURL = `${process.env.BUBBLE_API_URL}/transactions?constraints=[
                         {"key":"Created By","constraint_type":"equals","value":"${userId}"},
                         {"key":"is_pending?","constraint_type":"equals","value":"false"}
-                    ]&limit=${limit}`;
+                    ]&limit=${limit}&sort_field=Date&sort_direction=descending`;
+
+                    console.log("🌍 Fetching transactions for user:", userId);
 
                     const transactionResponse = await axios.get(bubbleURL, {
                         headers: { 'Authorization': `Bearer ${process.env.BUBBLE_API_KEY}` }
@@ -221,6 +247,7 @@ app.post('/assistant', async (req, res) => {
                         instructions: instructions || "You are the Bountisphere AI Money Coach. Always be aware of the real date when answering questions.",
                         metadata: {
                             userId: userId,
+                            userEmail: userResponse.data.response.results[0].email,
                             transactions: transactions
                         }
                     });
