@@ -87,7 +87,7 @@ app.post('/analyze-transactions', async (req, res) => {
 
     // 🔥 Step 2: Send Past Transactions to OpenAI for Analysis
     const openAIResponse = await openai.chat.completions.create({
-      model: process.env.OPENAI_MODEL || 'gpt-4o',
+      model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
       messages: [
         {
           role: "system",
@@ -170,7 +170,7 @@ app.post('/ask-question', async (req, res) => {
 
     // 🔥 Step 2: Send Question and Data to OpenAI
     const openAIResponse = await openai.chat.completions.create({
-      model: process.env.OPENAI_MODEL || 'gpt-4',
+      model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
       messages: [
         {
           role: "system",
@@ -201,17 +201,15 @@ app.post('/assistant', async (req, res) => {
   try {
     // Extract relevant fields from the request body
     const { model, tools, input, instructions } = req.body;
-    // We'll expect the userId from query string or body
+    // Expect the userId from query string or body
     const userId = req.query.userId || req.body.userId;
     console.log("📥 Received request with userId:", userId);
 
-    // Validate user ID
+    // Validate user ID and input
     if (!userId) {
       console.error("❌ No userId provided in request");
       return res.status(400).json({ error: 'User ID is required' });
     }
-
-    // Validate input
     if (!input) {
       console.error("❌ No input provided in request");
       return res.status(400).json({ error: 'Input is required' });
@@ -233,25 +231,25 @@ app.post('/assistant', async (req, res) => {
     console.log("✅ User verified:", userId);
 
     // 🔥 Step 2: Create the initial response with OpenAI's Responses API
-    // NOTE: The "function" is defined as a tool, not in a top-level "functions" array.
+    // The "function" is defined as a tool in the tools array.
     const response = await openai.responses.create({
-      model: model || 'gpt-4',
+      model: model || 'gpt-4o-mini',
       tools: tools || [
         {
-          "type": "function",
-          "name": "get_user_transactions",
-          "description": "Fetch a user's transactions from the Bountisphere endpoint for analysis",
-          "parameters": {
-            "type": "object",
-            "properties": {
-              "userId": {
-                "type": "string",
-                "description": "The user ID whose transactions we need to fetch"
+          type: "function",
+          name: "get_user_transactions",
+          description: "Fetch a user's transactions from the Bountisphere endpoint for analysis",
+          parameters: {
+            type: "object",
+            properties: {
+              userId: {
+                type: "string",
+                description: "The user ID whose transactions we need to fetch"
               }
             },
-            "required": ["userId"]
+            required: ["userId"]
           },
-          "strict": true
+          strict: true
         }
       ],
       input: input,
@@ -268,7 +266,7 @@ app.post('/assistant', async (req, res) => {
     if (response.output && response.output.length > 0) {
       for (const output of response.output) {
         if (output.type === 'function_call' && output.name === 'get_user_transactions') {
-          // 3A. Parse arguments (they might be a JSON string)
+          // Parse arguments (they might be a JSON string)
           let args = output.arguments;
           if (typeof args === 'string') {
             try {
@@ -279,11 +277,11 @@ app.post('/assistant', async (req, res) => {
             }
           }
 
-          // 3B. If the function call includes a userId, confirm or override with the userId from the request
-          const functionUserId = args.userId || userId;
+          // Use the trusted userId from the request
+          const functionUserId = userId || args.userId;
           console.log("🌍 The model is requesting transactions for user:", functionUserId);
 
-          // 3C. Fetch transactions from your /transactions endpoint
+          // Fetch transactions from the /transactions endpoint
           const transactionResponse = await axios.post(
             'https://bountisphere-openai-617952217530.us-central1.run.app/transactions',
             { userId: functionUserId }
@@ -291,16 +289,16 @@ app.post('/assistant', async (req, res) => {
           const transactions = transactionResponse.data;
           console.log("✅ Transactions retrieved:", transactions.length, "records");
 
-          // 3D. Return the transaction data as the function call result
+          // 🔥 Step 4: Return the transaction data as the tool call result
           const followUpResponse = await openai.responses.create({
-            model: model || 'gpt-4',
-            input,
+            model: model || 'gpt-4o-mini',
+            input: input,
             instructions: instructions || "You are the Bountisphere Money Coach.",
             metadata: {
               userId: functionUserId,
               userEmail: userResponse.data.response.results[0].email
             },
-            function_call_result: {
+            tool_call_result: {
               name: 'get_user_transactions',
               data: { transactions }
             },
@@ -313,7 +311,7 @@ app.post('/assistant', async (req, res) => {
       }
     }
 
-    // If no function calls, return the initial response
+    // If no function calls were made, return the initial response
     res.json(response);
 
   } catch (error) {
