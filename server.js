@@ -36,6 +36,7 @@ app.post('/transactions', async (req, res) => {
         const bubbleURL = `${process.env.BUBBLE_API_URL}/transactions?constraints=[
             {"key":"Created By","constraint_type":"equals","value":"${userId}"},
             {"key":"Date","constraint_type":"less than","value":"${today}"},
+            {"key":"Transaction Frequency","constraint_type":"does not equal","value":"Future Transactions"},
             {"key":"is_pending?","constraint_type":"equals","value":"false"}
         ]`;
 
@@ -67,10 +68,12 @@ app.post('/analyze-transactions', async (req, res) => {
 
         const today = new Date().toISOString().split("T")[0];
 
-        // 🔥 Step 1: Fetch Past Transactions
+        // 🔥 Fetch Past Transactions (Exclude Future Transactions)
         const bubbleURL = `${process.env.BUBBLE_API_URL}/transactions?constraints=[
             {"key":"Created By","constraint_type":"equals","value":"${userId}"},
-            {"key":"Date","constraint_type":"less than","value":"${today}"}
+            {"key":"Date","constraint_type":"less than","value":"${today}"},
+            {"key":"Transaction Frequency","constraint_type":"does not equal","value":"Future Transactions"},
+            {"key":"is_pending?","constraint_type":"equals","value":"false"}
         ]`;
 
         console.log("🌍 Fetching past transactions from:", bubbleURL);
@@ -85,7 +88,7 @@ app.post('/analyze-transactions', async (req, res) => {
             return res.json({ message: "No past transactions found for analysis." });
         }
 
-        // 🔥 Step 2: Send Past Transactions to OpenAI for Analysis
+        // 🔥 Send Past Transactions to OpenAI for Analysis
         const openAIResponse = await openai.chat.completions.create({
             model: process.env.OPENAI_MODEL || 'gpt-4o',
             messages: [
@@ -93,22 +96,6 @@ app.post('/analyze-transactions', async (req, res) => {
                 { role: "user", content: `Analyze the user's past transactions up to ${today}. Identify spending trends, recurring expenses, and budgeting opportunities based on these transactions:` },
                 { role: "user", content: JSON.stringify(transactions, null, 2) }
             ],
-            functions: [
-                {
-                    name: "analyze_spending",
-                    description: "Analyze past spending trends, recurring expenses, and budgeting opportunities",
-                    parameters: {
-                        type: "object",
-                        properties: {
-                            total_spent: { type: "number", description: "Total amount spent in the given period" },
-                            top_categories: { type: "array", items: { type: "string" }, description: "Most frequent spending categories" },
-                            recurring_expenses: { type: "array", items: { type: "string" }, description: "Recurring transactions detected" },
-                            savings_opportunities: { type: "array", items: { type: "string" }, description: "Potential areas where spending could be reduced" }
-                        }
-                    }
-                }
-            ],
-            function_call: "auto",
             temperature: 0.7
         });
 
@@ -118,175 +105,6 @@ app.post('/analyze-transactions', async (req, res) => {
     } catch (error) {
         console.error("❌ Error processing /analyze-transactions:", error.response?.data || error.message);
         res.status(500).json({ error: 'Internal server error' });
-    }
-});
-
-// 🔹 Handle General Questions About Data
-app.post('/ask-question', async (req, res) => {
-    try {
-        const { userId, question } = req.body;
-
-        if (!userId || !question) {
-            return res.status(400).json({ error: 'User ID and question are required' });
-        }
-
-        // 🔥 Step 1: Fetch Relevant Data
-        const bubbleURL = `${process.env.BUBBLE_API_URL}/transactions?constraints=[
-            {"key":"Created By","constraint_type":"equals","value":"${userId}"}
-        ]`;
-
-        console.log("🌍 Fetching data from Bubble for question:", question);
-
-        const dataResponse = await axios.get(bubbleURL, {
-            headers: { 'Authorization': `Bearer ${process.env.BUBBLE_API_KEY}` }
-        });
-
-        const data = dataResponse.data?.response?.results || [];
-
-        if (data.length === 0) {
-            return res.json({ message: "No data found to answer your question." });
-        }
-
-        // 🔥 Step 2: Send Question and Data to OpenAI
-        const openAIResponse = await openai.chat.completions.create({
-            model: process.env.OPENAI_MODEL || 'gpt-4',
-            messages: [
-                { 
-                    role: "system", 
-                    content: "You are a helpful assistant that analyzes financial data and answers questions about transactions, spending patterns, and financial insights. Provide clear, concise answers based on the available data." 
-                },
-                { 
-                    role: "user", 
-                    content: `Here is the user's data and question. Please analyze the data and answer the question: "${question}"\n\nData: ${JSON.stringify(data, null, 2)}` 
-                }
-            ],
-            temperature: 0.7
-        });
-
-        console.log("✅ OpenAI Response Received");
-        res.json({
-            answer: openAIResponse.choices[0].message.content,
-            data_used: data.length
-        });
-
-    } catch (error) {
-        console.error("❌ Error processing question:", error.response?.data || error.message);
-        res.status(500).json({ error: 'Internal server error' });
-    }
-});
-
-// 🔹 OpenAI Responses API Endpoint
-app.post('/assistant', async (req, res) => {
-    try {
-        const { model, tools, input, instructions } = req.body;
-        const userId = req.query.userId; // Get userId from query parameters
-
-        console.log("📥 Received request with userId:", userId);
-
-        // Validate user ID
-        if (!userId) {
-            console.error("❌ No userId provided in request");
-            return res.status(400).json({ error: 'User ID is required' });
-        }
-
-        // Validate input
-        if (!input) {
-            console.error("❌ No input provided in request");
-            return res.status(400).json({ error: 'Input is required' });
-        }
-
-        // 🔥 Step 1: Verify user exists in Bubble
-        const userURL = `${process.env.BUBBLE_API_URL}/user?constraints=[
-            {"key":"_id","constraint_type":"equals","value":"${userId}"}
-        ]`;
-
-        console.log("🔍 Verifying user:", userId);
-
-        try {
-            const userResponse = await axios.get(userURL, {
-                headers: { 'Authorization': `Bearer ${process.env.BUBBLE_API_KEY}` }
-            });
-
-            if (!userResponse.data?.response?.results?.length) {
-                console.error("❌ User not found in Bubble:", userId);
-                return res.status(404).json({ error: 'User not found' });
-            }
-
-            console.log("✅ User verified:", userId);
-
-            // 🔥 Step 2: Create the response
-            const response = await openai.responses.create({
-                model: model || 'gpt-4',
-                tools: tools || [],
-                input: input,
-                instructions: instructions || "You are the Bountisphere AI Money Coach. Always be aware of the real date when answering questions. If the user asks about their transactions, call the 'get_transactions' function to retrieve their financial data.",
-                metadata: {
-                    userId: userId,
-                    userEmail: userResponse.data.response.results[0].email
-                }
-            });
-
-            console.log("✅ Initial OpenAI response received");
-
-            // 🔥 Step 3: Handle function calls if any
-            if (response.output && response.output.length > 0) {
-                for (const output of response.output) {
-                    if (output.type === 'function_call' && output.name === 'get_transactions') {
-                        // Always use the actual userId from the request
-                        const args = {
-                            userId: userId,
-                            limit: 3 // Default to 3 transactions
-                        };
-
-                        // Fetch transactions from Bubble with user-specific constraints
-                        const bubbleURL = `${process.env.BUBBLE_API_URL}/transactions?constraints=[
-                            {"key":"Created By","constraint_type":"equals","value":"${userId}"},
-                            {"key":"is_pending?","constraint_type":"equals","value":"false"}
-                        ]&limit=${args.limit}&sort_field=Date&sort_direction=descending`;
-
-                        console.log("🌍 Fetching transactions for user:", userId);
-
-                        const transactionResponse = await axios.get(bubbleURL, {
-                            headers: { 'Authorization': `Bearer ${process.env.BUBBLE_API_KEY}` }
-                        });
-
-                        const transactions = transactionResponse.data?.response?.results || [];
-
-                        // Create a new response with the transaction data
-                        const followUpResponse = await openai.responses.create({
-                            model: model || 'gpt-4',
-                            input: input,
-                            instructions: instructions || "You are the Bountisphere AI Money Coach. Always be aware of the real date when answering questions.",
-                            metadata: {
-                                userId: userId,
-                                userEmail: userResponse.data.response.results[0].email,
-                                transactions: transactions
-                            },
-                            previous_response_id: response.id
-                        });
-
-                        return res.json(followUpResponse);
-                    }
-                }
-            }
-
-            // If no function calls were made, return the initial response
-            res.json(response);
-
-        } catch (bubbleError) {
-            console.error("❌ Error calling Bubble API:", bubbleError.response?.data || bubbleError.message);
-            return res.status(500).json({ 
-                error: 'Error accessing Bubble API',
-                details: bubbleError.response?.data || bubbleError.message
-            });
-        }
-
-    } catch (error) {
-        console.error("❌ Error processing response request:", error.response?.data || error.message);
-        return res.status(500).json({ 
-            error: 'Internal server error',
-            details: error.response?.data || error.message
-        });
     }
 });
 
