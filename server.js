@@ -33,12 +33,20 @@ app.post('/transactions', async (req, res) => {
 
         // Build constraints array - start with just the user ID
         const constraints = [
-            {"key": "Created By", "constraint_type": "equals", "value": userId}
+            {"key": "Created By", "constraint_type": "equals", "value": userId},
+            {"key": "is_pending?", "constraint_type": "equals", "value": "false"}
         ];
 
-        const bubbleURL = `${process.env.BUBBLE_API_URL}/transactions?constraints=${encodeURIComponent(JSON.stringify(constraints))}&sort_field=Date&sort_direction=descending&limit=10`;
+        // Add date constraint to get recent transactions
+        const today = new Date().toISOString().split('T')[0];
+        const ninetyDaysAgo = new Date(Date.now() - (90 * 24 * 60 * 60 * 1000)).toISOString().split('T')[0];
+        constraints.push({"key": "Date", "constraint_type": "greater than or equal", "value": ninetyDaysAgo});
+        constraints.push({"key": "Date", "constraint_type": "less than or equal", "value": today});
+
+        const bubbleURL = `${process.env.BUBBLE_API_URL}/transactions?constraints=${encodeURIComponent(JSON.stringify(constraints))}&sort_field=Date&sort_direction=descending&limit=100`;
 
         console.log("🌍 Fetching transactions from:", bubbleURL);
+        console.log("📅 Date range:", { ninetyDaysAgo, today });
         console.log("🔍 Constraints:", JSON.stringify(constraints, null, 2));
 
         try {
@@ -67,13 +75,21 @@ app.post('/transactions', async (req, res) => {
                 dateRange: transactions.length > 0 ? {
                     earliest: transactions[transactions.length - 1].Date,
                     latest: transactions[0].Date,
-                    currentServerTime: new Date().toISOString()
+                    currentServerTime: new Date().toISOString(),
+                    requestedDateRange: {
+                        startDate: ninetyDaysAgo,
+                        endDate: today
+                    }
                 } : null,
                 query: {
                     url: bubbleURL,
                     constraints,
                     userId,
-                    rawResponse: response.data
+                    rawResponse: response.data,
+                    pagination: {
+                        cursor: response.data?.response?.cursor,
+                        remaining: response.data?.response?.remaining
+                    }
                 },
                 userInfo: transactions.length > 0 ? {
                     providedUserId: userId,
@@ -93,7 +109,11 @@ app.post('/transactions', async (req, res) => {
             res.json({
                 success: true,
                 transactions,
-                debug: debugInfo
+                debug: debugInfo,
+                pagination: {
+                    cursor: response.data?.response?.cursor,
+                    remaining: response.data?.response?.remaining
+                }
             });
 
         } catch (error) {
