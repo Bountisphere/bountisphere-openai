@@ -26,15 +26,26 @@ app.get('/', (req, res) => {
 // 🔹 Fetch Transactions (Basic endpoint)
 app.post('/transactions', async (req, res) => {
     try {
-        const { userId } = req.body;
+        const { userId, startDate, endDate } = req.body;
         if (!userId) {
             return res.status(400).json({ error: 'User ID is required' });
         }
 
-        const bubbleURL = `${process.env.BUBBLE_API_URL}/transactions?constraints=[
-            {"key":"Created By","constraint_type":"equals","value":"${userId}"},
-            {"key":"is_pending?","constraint_type":"equals","value":"false"}
-        ]&sort_field=Date&sort_direction=descending`;
+        // Build constraints array
+        const constraints = [
+            {"key": "Created By", "constraint_type": "equals", "value": userId},
+            {"key": "is_pending?", "constraint_type": "equals", "value": "false"}
+        ];
+
+        // Add date range constraints if provided
+        if (startDate) {
+            constraints.push({"key": "Date", "constraint_type": "greater than or equal", "value": startDate});
+        }
+        if (endDate) {
+            constraints.push({"key": "Date", "constraint_type": "less than or equal", "value": endDate});
+        }
+
+        const bubbleURL = `${process.env.BUBBLE_API_URL}/transactions?constraints=${encodeURIComponent(JSON.stringify(constraints))}&sort_field=Date&sort_direction=descending`;
 
         console.log("🌍 Fetching transactions from:", bubbleURL);
 
@@ -43,12 +54,49 @@ app.post('/transactions', async (req, res) => {
         });
 
         const transactions = response.data?.response?.results || [];
+        
+        // Add debug information
+        const debugInfo = {
+            totalTransactions: transactions.length,
+            dateRange: transactions.length > 0 ? {
+                earliest: transactions[transactions.length - 1].Date,
+                latest: transactions[0].Date,
+                currentServerTime: new Date().toISOString()
+            } : null,
+            query: {
+                url: bubbleURL,
+                constraints,
+                userId
+            },
+            userInfo: transactions.length > 0 ? {
+                providedUserId: userId,
+                transactionCreatedBy: transactions[0]['Created By'],
+                userEmail: transactions[0].User_Email || null,
+                otherUserFields: Object.keys(transactions[0]).filter(key => 
+                    key.toLowerCase().includes('user') || 
+                    key.toLowerCase().includes('email') ||
+                    key === 'Created By'
+                )
+            } : null
+        };
+
         console.log(`✅ Retrieved ${transactions.length} transactions`);
-        res.json(transactions);
+        console.log("📊 Date range:", debugInfo.dateRange);
+        
+        res.json({
+            success: true,
+            transactions,
+            debug: debugInfo
+        });
 
     } catch (error) {
-        console.error("❌ Error fetching transactions:", error.message);
-        res.status(500).json({ error: 'Internal server error' });
+        console.error("❌ Error fetching transactions:", error.response?.data || error.message);
+        console.error("Full error:", error);
+        res.status(500).json({ 
+            error: 'Internal server error', 
+            details: error.message,
+            url: error.config?.url || 'URL not available'
+        });
     }
 });
 
@@ -175,7 +223,7 @@ app.post('/ask-question', async (req, res) => {
 app.post('/assistant', async (req, res) => {
     try {
         const { input } = req.body;
-        const userId = req.query.userId;
+        const userId = req.query.userId?.trim(); // Remove any whitespace or newlines
 
         console.log("📥 Received request with userId:", userId);
 
@@ -183,11 +231,13 @@ app.post('/assistant', async (req, res) => {
             return res.status(400).json({ error: 'User ID and input are required' });
         }
 
-        // 🔥 Step 1: Fetch transactions
-        const bubbleURL = `${process.env.BUBBLE_API_URL}/transactions?constraints=[
-            {"key":"Created By","constraint_type":"equals","value":"${userId}"},
-            {"key":"is_pending?","constraint_type":"equals","value":"false"}
-        ]&sort_field=Date&sort_direction=descending`;
+        // 🔥 Step 1: Fetch transactions with properly formatted URL
+        const constraints = JSON.stringify([
+            {"key": "Created By", "constraint_type": "equals", "value": userId},
+            {"key": "is_pending?", "constraint_type": "equals", "value": "false"}
+        ]);
+        
+        const bubbleURL = `${process.env.BUBBLE_API_URL}/transactions?constraints=${encodeURIComponent(constraints)}&sort_field=Date&sort_direction=descending`;
 
         console.log("🌍 Attempting to fetch from URL:", bubbleURL);
 
@@ -196,20 +246,16 @@ app.post('/assistant', async (req, res) => {
         });
 
         const transactions = transactionResponse.data?.response?.results || [];
+        console.log(`✅ Retrieved ${transactions.length} transactions`);
         
         // Debug: Log all transaction dates
         console.log("📊 All transaction dates:");
         transactions.forEach((t, index) => {
-            console.log(`${index + 1}. Date: ${t.Date}, Amount: ${t.Amount}, Description: ${t.Description}`);
+            console.log(`${index + 1}. Date: ${t.Date}, Amount: ${t.Amount}, Bank: ${t.Bank}, Description: ${t.Description}`);
         });
 
         // Take only the last 3 transactions
         const recentTransactions = transactions.slice(0, 3);
-        
-        console.log("🔍 Selected transactions:");
-        recentTransactions.forEach((t, index) => {
-            console.log(`${index + 1}. Date: ${t.Date}, Amount: ${t.Amount}, Description: ${t.Description}`);
-        });
 
         // Format transactions for better readability with all Bubble fields
         const formattedTransactions = recentTransactions.map(t => ({
@@ -217,10 +263,10 @@ app.post('/assistant', async (req, res) => {
             account_id: t.Account_ID,
             amount: parseFloat(t.Amount).toFixed(2),
             bank: t.Bank || '',
-            currency: t.Currency_Code || 'USD',
+            currency_code: t.Currency_Code || 'USD',
             
             // Dates and Timing
-            date: new Date(t.Date).toLocaleString(),
+            date: t.Date ? new Date(t.Date).toLocaleString() : '',
             date_day_of_month: t.Date_Day_of_Month,
             month: t.Month,
             year: t.Year,
@@ -235,7 +281,7 @@ app.post('/assistant', async (req, res) => {
             
             // Description and Merchant
             description: t.Description || 'No description',
-            merchant: t.Merchant_Name || '',
+            merchant_name: t.Merchant_Name || '',
             
             // Status Flags
             is_pending: t.is_pending === 'yes',
@@ -257,8 +303,8 @@ app.post('/assistant', async (req, res) => {
         const debugInfo = {
             totalTransactions: transactions.length,
             dateRange: transactions.length > 0 ? {
-                earliest: new Date(transactions[transactions.length - 1].Date).toISOString(),
-                latest: new Date(transactions[0].Date).toISOString(),
+                earliest: transactions[transactions.length - 1].Date,
+                latest: transactions[0].Date,
                 currentServerTime: new Date().toISOString()
             } : null,
             query: {
@@ -267,7 +313,7 @@ app.post('/assistant', async (req, res) => {
             }
         };
 
-        // Enhance OpenAI's system prompt with more context
+        // 🔥 Step 2: Send to OpenAI for analysis with enhanced prompt
         const openAIResponse = await client.chat.completions.create({
             model: "gpt-4",
             messages: [
@@ -304,7 +350,8 @@ app.post('/assistant', async (req, res) => {
         res.status(500).json({ 
             error: 'Internal server error', 
             details: error.message,
-            url: error.config?.url || 'URL not available'
+            url: error.config?.url || 'URL not available',
+            stack: error.stack
         });
     }
 });
