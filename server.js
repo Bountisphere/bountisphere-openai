@@ -307,10 +307,18 @@ app.post('/assistant', async (req, res) => {
         const transactions = transactionResponse.data?.response?.results || [];
         console.log(`✅ Retrieved ${transactions.length} transactions`);
         
-        // Debug: Log all transaction dates
-        console.log("📊 All transaction dates:");
+        // Debug: Log all transaction dates with more details
+        console.log("📊 All transaction dates with details:");
         transactions.forEach((t, index) => {
-            console.log(`${index + 1}. Date: ${t.Date}, Amount: ${t.Amount}, Bank: ${t.Bank}, Description: ${t.Description}`);
+            const transactionDate = new Date(t.Date);
+            console.log(`${index + 1}. Date: ${t.Date} (${transactionDate.toLocaleString()}), Amount: ${t.Amount}, Bank: ${t.Bank}, Description: ${t.Description}, Month: ${t.Month}, Year: ${t.Year}`);
+        });
+
+        // Log March transactions specifically
+        const marchTransactions = transactions.filter(t => t.Month === 'Mar');
+        console.log(`\n📅 March transactions (${marchTransactions.length}):`);
+        marchTransactions.forEach((t, index) => {
+            console.log(`${index + 1}. Date: ${t.Date}, Amount: ${t.Amount}, Description: ${t.Description}`);
         });
 
         // Sort transactions by date to ensure we get the most recent ones
@@ -318,11 +326,14 @@ app.post('/assistant', async (req, res) => {
             return new Date(b.Date) - new Date(a.Date);
         });
 
-        // Take only the last 3 transactions
-        const recentTransactions = sortedTransactions.slice(0, 3);
+        // Log the first few sorted transactions for debugging
+        console.log("\n📊 First 5 sorted transactions:");
+        sortedTransactions.slice(0, 5).forEach((t, index) => {
+            console.log(`${index + 1}. Date: ${t.Date}, Amount: ${t.Amount}, Description: ${t.Description}`);
+        });
 
-        // Format transactions for better readability with all Bubble fields
-        const formattedTransactions = recentTransactions.map(t => ({
+        // Format all transactions for better readability with all Bubble fields
+        const formattedTransactions = sortedTransactions.map(t => ({
             // Core Transaction Details
             account_id: t.Account_ID,
             amount: parseFloat(t.Amount).toFixed(2),
@@ -413,7 +424,9 @@ app.post('/assistant', async (req, res) => {
                             "4. Include transaction dates and times\n" +
                             "5. Note if transactions are pending or manually added\n" +
                             "6. Consider the personal finance category for insights\n" +
-                            "7. Include relevant transaction notes if available"
+                            "7. Include relevant transaction notes if available\n" +
+                            "8. When analyzing multiple transactions, look for patterns and trends\n" +
+                            "9. Consider the full date range of transactions when answering questions"
                 },
                 {
                     role: "user",
