@@ -248,7 +248,7 @@ app.post('/assistant', async (req, res) => {
                         input: input,
                         instructions: "You are the Bountisphere Money Coach—a friendly, supportive, and expert financial assistant. Analyze the transactions provided and answer the user's question.",
                         previous_response_id: response.id,
-                        tool_outputs: [
+                        tool_results: [
                             {
                                 tool_call_id: output.id,
                                 output: JSON.stringify(transactionSummary)
