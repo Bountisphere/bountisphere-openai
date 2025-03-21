@@ -242,23 +242,21 @@ app.post('/assistant', async (req, res) => {
                         description: t.Description
                     }));
 
-                    // Return the response with tool outputs
-                    return res.json({
-                        id: response.id,
+                    // Make a follow-up call to OpenAI with the tool outputs
+                    const followUpResponse = await client.responses.create({
                         model: "gpt-4o-mini",
-                        created_at: response.created_at,
-                        output: [
+                        input: input,
+                        instructions: "You are the Bountisphere Money Coach—a friendly, supportive, and expert financial assistant. Analyze the transactions provided and answer the user's question.",
+                        previous_response_id: response.id,
+                        tool_call_results: [
                             {
-                                type: "tool_outputs",
-                                tool_outputs: [
-                                    {
-                                        tool_call_id: output.id,
-                                        output: JSON.stringify(transactionSummary)
-                                    }
-                                ]
+                                tool_call_id: output.id,
+                                output: JSON.stringify(transactionSummary)
                             }
                         ]
                     });
+
+                    return res.json(followUpResponse);
                 }
             }
         }
