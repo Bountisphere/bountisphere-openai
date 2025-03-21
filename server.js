@@ -184,20 +184,12 @@ app.post('/assistant', async (req, res) => {
         }
 
         // 🔥 Step 1: Fetch transactions
-        const today = new Date().toISOString().split('T')[0];
-        const threeMonthsAgo = new Date();
-        threeMonthsAgo.setMonth(threeMonthsAgo.getMonth() - 3);
-        const threeMonthsAgoStr = threeMonthsAgo.toISOString().split('T')[0];
-
         const bubbleURL = `${process.env.BUBBLE_API_URL}/transactions?constraints=[
             {"key":"Created By","constraint_type":"equals","value":"${userId}"},
-            {"key":"is_pending?","constraint_type":"equals","value":"false"},
-            {"key":"Date","constraint_type":"greater than","value":"${threeMonthsAgoStr}"},
-            {"key":"Date","constraint_type":"less than or equal","value":"${today}"}
-        ]&sort_field=Date&sort_direction=descending&limit=3`;
+            {"key":"is_pending?","constraint_type":"equals","value":"false"}
+        ]&sort_field=Date&sort_direction=descending`;
 
-        console.log("🌍 Fetching recent transactions for user:", userId);
-        console.log("📅 Date range:", threeMonthsAgoStr, "to", today);
+        console.log("🌍 Attempting to fetch from URL:", bubbleURL);
 
         const transactionResponse = await axios.get(bubbleURL, {
             headers: { 'Authorization': `Bearer ${process.env.BUBBLE_API_KEY}` }
@@ -206,8 +198,11 @@ app.post('/assistant', async (req, res) => {
         const transactions = transactionResponse.data?.response?.results || [];
         console.log(`✅ Retrieved ${transactions.length} transactions`);
 
+        // Take only the last 3 transactions
+        const recentTransactions = transactions.slice(0, 3);
+
         // Format transactions for better readability
-        const formattedTransactions = transactions.map(t => ({
+        const formattedTransactions = recentTransactions.map(t => ({
             date: new Date(t.Date).toLocaleDateString(),
             description: t.Description,
             amount: t.Amount.toFixed(2),
@@ -240,7 +235,12 @@ app.post('/assistant', async (req, res) => {
 
     } catch (error) {
         console.error("❌ Error in /assistant endpoint:", error.response?.data || error.message);
-        res.status(500).json({ error: 'Internal server error', details: error.message });
+        console.error("Full error:", error);
+        res.status(500).json({ 
+            error: 'Internal server error', 
+            details: error.message,
+            url: error.config?.url || 'URL not available'
+        });
     }
 });
 
