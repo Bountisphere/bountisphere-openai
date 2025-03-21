@@ -40,8 +40,8 @@ app.post('/transactions', async (req, res) => {
         // Add date constraint to get recent transactions
         const today = new Date().toISOString().split('T')[0];
         const ninetyDaysAgo = new Date(Date.now() - (90 * 24 * 60 * 60 * 1000)).toISOString().split('T')[0];
-        constraints.push({"key": "Date", "constraint_type": "greater than or equal", "value": ninetyDaysAgo});
-        constraints.push({"key": "Date", "constraint_type": "less than or equal", "value": today});
+        constraints.push({"key": "Date", "constraint_type": "greater than", "value": ninetyDaysAgo});
+        constraints.push({"key": "Date", "constraint_type": "less than", "value": today});
 
         const bubbleURL = `${process.env.BUBBLE_API_URL}/transactions?constraints=${encodeURIComponent(JSON.stringify(constraints))}&sort_field=Date&sort_direction=descending&limit=100`;
 
