@@ -65,7 +65,7 @@ app.post('/assistant', async (req, res) => {
         }
 
         // 🔥 Step 1: Create the OpenAI response
-        const response = await openai.responses.create({
+        const response = await client.responses.create({
             model: "gpt-4o-mini",
             tools: [
                 {
@@ -117,7 +117,7 @@ app.post('/assistant', async (req, res) => {
                     console.log(`✅ Retrieved ${transactions.length} transactions`);
 
                     // Create a follow-up response with the transaction data
-                    const followUpResponse = await openai.responses.create({
+                    const followUpResponse = await client.responses.create({
                         model: "gpt-4o-mini",
                         input: input,
                         instructions: "You are the Bountisphere Money Coach—a friendly, supportive, and expert financial assistant.",
