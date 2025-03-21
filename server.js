@@ -235,14 +235,18 @@ app.post('/assistant', async (req, res) => {
                     const transactions = transactionResponse.data?.response?.results || [];
                     console.log(`✅ Retrieved ${transactions.length} transactions`);
 
+                    // Create a summarized version of transactions
+                    const transactionSummary = transactions.slice(0, 3).map(t => ({
+                        date: t.Date,
+                        amount: t.Amount,
+                        description: t.Description
+                    }));
+
                     // Create a follow-up response with the transaction data
                     const followUpResponse = await client.responses.create({
                         model: "gpt-4o-mini",
-                        input: input,
-                        instructions: "You are the Bountisphere Money Coach—a friendly, supportive, and expert financial assistant.",
-                        metadata: {
-                            transactions: JSON.stringify(transactions)
-                        },
+                        input: `Here are your last three transactions: ${JSON.stringify(transactionSummary)}. ${input}`,
+                        instructions: "You are the Bountisphere Money Coach—a friendly, supportive, and expert financial assistant. Analyze the transactions provided and answer the user's question.",
                         previous_response_id: response.id
                     });
 
