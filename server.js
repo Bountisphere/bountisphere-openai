@@ -326,14 +326,17 @@ app.post('/assistant', async (req, res) => {
             return new Date(b.Date) - new Date(a.Date);
         });
 
+        // Take only the most recent 50 transactions for GPT-4
+        const recentTransactions = sortedTransactions.slice(0, 50);
+
         // Log the first few sorted transactions for debugging
         console.log("\n📊 First 5 sorted transactions:");
-        sortedTransactions.slice(0, 5).forEach((t, index) => {
+        recentTransactions.slice(0, 5).forEach((t, index) => {
             console.log(`${index + 1}. Date: ${t.Date}, Amount: ${t.Amount}, Description: ${t.Description}`);
         });
 
         // Format transactions for better readability with all Bubble fields
-        const formattedTransactions = sortedTransactions.map(t => ({
+        const formattedTransactions = recentTransactions.map(t => ({
             // Core Transaction Details - only include essential fields
             date: t.Date ? new Date(t.Date).toLocaleString() : '',
             amount: parseFloat(t.Amount).toFixed(2),
@@ -357,6 +360,7 @@ app.post('/assistant', async (req, res) => {
         // Add debug information to the response
         const debugInfo = {
             totalTransactions: transactions.length,
+            recentTransactionsUsed: recentTransactions.length,
             dateRange: transactions.length > 0 ? {
                 earliest: transactions[transactions.length - 1].Date,
                 latest: transactions[0].Date,
@@ -387,7 +391,8 @@ app.post('/assistant', async (req, res) => {
                             "5. Note if transactions are pending or manually added\n" +
                             "6. Consider the personal finance category for insights\n" +
                             "7. Look for patterns and trends across transactions\n" +
-                            "8. Consider the full date range when answering questions"
+                            "8. Consider the full date range when answering questions\n" +
+                            "9. Note that you're analyzing the 50 most recent transactions"
                 },
                 {
                     role: "user",
