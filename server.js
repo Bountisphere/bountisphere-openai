@@ -241,7 +241,7 @@ app.post('/assistant', async (req, res) => {
                         input: input,
                         instructions: "You are the Bountisphere Money Coach—a friendly, supportive, and expert financial assistant.",
                         metadata: {
-                            transactions: transactions
+                            transactions: JSON.stringify(transactions)
                         },
                         previous_response_id: response.id
                     });
