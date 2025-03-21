@@ -333,7 +333,7 @@ app.post('/assistant', async (req, res) => {
             modified_date: t.Modified_Date,
             
             // Categories and Types
-            category: t.Category || 'Uncategorized',
+            category: t.Category || t['Category (Old)'] || 'Uncategorized',
             category_description: t.Category_Description || '',
             category_details: t.Category_Details || '',
             transaction_type: t.Transaction_Type || '',
@@ -345,7 +345,7 @@ app.post('/assistant', async (req, res) => {
             // Status Flags
             is_pending: t.is_pending === 'yes',
             manually_added: t.Manually_Added === 'yes',
-            workflow_completed: t.Workflow_completed === 'yes',
+            workflow_completed: t.workflow_completed === 'yes',
             
             // Additional Details
             personal_finance_category: t.Personal_Finance_Category || '',
@@ -355,7 +355,13 @@ app.post('/assistant', async (req, res) => {
             // System Fields
             transaction_id: t.Transaction_ID || '',
             unique_id: t.Unique_id || '',
-            stream_id: t.Stream_id || ''
+            stream_id: t['stream id'] || '',
+            
+            // Additional Fields
+            transaction_frequency: t.Transaction_Frequency || '',
+            account: t.Account || '',
+            account_holder: t.Account_Holder || '',
+            account_holders_profile: t["Account Holder's Profile"] || ''
         }));
 
         // Add debug information to the response
@@ -364,11 +370,15 @@ app.post('/assistant', async (req, res) => {
             dateRange: transactions.length > 0 ? {
                 earliest: transactions[transactions.length - 1].Date,
                 latest: transactions[0].Date,
-                currentServerTime: new Date().toISOString()
+                currentServerTime: new Date().toISOString(),
+                requestedDateRange: {
+                    startDate: ninetyDaysAgo,
+                    endDate: today
+                }
             } : null,
             query: {
                 url: bubbleURL,
-                constraints,
+                constraints: JSON.parse(constraints),
                 userId
             },
             userInfo: transactions.length > 0 ? {
