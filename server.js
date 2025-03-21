@@ -61,27 +61,39 @@ app.post('/transactions', async (req, res) => {
             dateRange: transactions.length > 0 ? {
                 earliest: transactions[transactions.length - 1].Date,
                 latest: transactions[0].Date,
-                currentServerTime: new Date().toISOString()
+                currentServerTime: new Date().toISOString(),
+                requestedDateRange: {
+                    startDate: startDate || 'not specified',
+                    endDate: endDate || 'not specified'
+                }
             } : null,
             query: {
                 url: bubbleURL,
                 constraints,
-                userId
+                userId,
+                rawResponse: response.data
             },
             userInfo: transactions.length > 0 ? {
                 providedUserId: userId,
                 transactionCreatedBy: transactions[0]['Created By'],
                 userEmail: transactions[0].User_Email || null,
-                otherUserFields: Object.keys(transactions[0]).filter(key => 
-                    key.toLowerCase().includes('user') || 
-                    key.toLowerCase().includes('email') ||
-                    key === 'Created By'
+                firstTransactionDetails: {
+                    date: transactions[0].Date,
+                    createdDate: transactions[0].Created_Date,
+                    modifiedDate: transactions[0].Modified_Date
+                },
+                rawUserFields: Object.fromEntries(
+                    Object.entries(transactions[0]).filter(([key]) => 
+                        key.toLowerCase().includes('user') || 
+                        key.toLowerCase().includes('email') ||
+                        key === 'Created By'
+                    )
                 )
             } : null
         };
 
         console.log(`✅ Retrieved ${transactions.length} transactions`);
-        console.log("📊 Date range:", debugInfo.dateRange);
+        console.log("📊 Full debug info:", JSON.stringify(debugInfo, null, 2));
         
         res.json({
             success: true,
@@ -309,8 +321,21 @@ app.post('/assistant', async (req, res) => {
             } : null,
             query: {
                 url: bubbleURL,
-                userId: userId
-            }
+                constraints,
+                userId
+            },
+            userInfo: transactions.length > 0 ? {
+                providedUserId: userId,
+                transactionCreatedBy: transactions[0]['Created By'],
+                userEmail: transactions[0].User_Email || null,
+                rawUserFields: Object.fromEntries(
+                    Object.entries(transactions[0]).filter(([key]) => 
+                        key.toLowerCase().includes('user') || 
+                        key.toLowerCase().includes('email') ||
+                        key === 'Created By'
+                    )
+                )
+            } : null
         };
 
         // 🔥 Step 2: Send to OpenAI for analysis with enhanced prompt
@@ -352,6 +377,71 @@ app.post('/assistant', async (req, res) => {
             details: error.message,
             url: error.config?.url || 'URL not available',
             stack: error.stack
+        });
+    }
+});
+
+// Add test endpoint for transaction date verification
+app.get('/api/test-transactions', async (req, res) => {
+    try {
+        const userId = req.query.userId;
+        if (!userId) {
+            return res.status(400).json({ error: 'userId is required' });
+        }
+
+        // Create a date range for the last 90 days
+        const endDate = new Date().toISOString().split('T')[0];
+        const startDate = new Date(Date.now() - (90 * 24 * 60 * 60 * 1000)).toISOString().split('T')[0];
+
+        const constraints = [
+            {"key": "Created By", "constraint_type": "equals", "value": userId},
+            {"key": "Date", "constraint_type": "greater than or equal", "value": startDate},
+            {"key": "Date", "constraint_type": "less than or equal", "value": endDate}
+        ];
+
+        const bubbleURL = `${process.env.BUBBLE_API_URL}/transactions?constraints=${encodeURIComponent(JSON.stringify(constraints))}&sort_field=Date&sort_direction=descending`;
+        
+        console.log('🔍 Test endpoint URL:', bubbleURL);
+        
+        const response = await axios.get(bubbleURL, {
+            headers: {
+                'Authorization': `Bearer ${process.env.BUBBLE_API_KEY}`
+            }
+        });
+
+        const transactions = response.data?.response?.results || [];
+        
+        const debugInfo = {
+            requestInfo: {
+                userId,
+                startDate,
+                endDate,
+                currentTime: new Date().toISOString(),
+                constraints: JSON.parse(decodeURIComponent(bubbleURL.split('constraints=')[1].split('&')[0]))
+            },
+            responseInfo: {
+                totalTransactions: transactions.length,
+                dateRange: transactions.length > 0 ? {
+                    earliest: transactions[transactions.length - 1].Date,
+                    latest: transactions[0].Date
+                } : null,
+                firstTransaction: transactions.length > 0 ? {
+                    date: transactions[0].Date,
+                    createdDate: transactions[0].Created_Date,
+                    modifiedDate: transactions[0].Modified_Date,
+                    createdBy: transactions[0]['Created By']
+                } : null,
+                rawResponse: response.data
+            }
+        };
+
+        res.json(debugInfo);
+    } catch (error) {
+        console.error('❌ Error in test-transactions endpoint:', error);
+        res.status(500).json({
+            error: 'Failed to fetch transactions',
+            details: error.message,
+            response: error.response?.data
         });
     }
 });
