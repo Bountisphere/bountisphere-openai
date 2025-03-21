@@ -164,7 +164,7 @@ app.post('/analyze-transactions', async (req, res) => {
         const bubbleURL = `${process.env.BUBBLE_API_URL}/transactions?constraints=[
             {"key":"Created By","constraint_type":"equals","value":"${userId}"},
             {"key":"Date","constraint_type":"less than","value":"${today}"}
-        ]`;
+        ]&sort_field=Date&sort_direction=descending&limit=100`;
 
         console.log("🌍 Fetching past transactions from:", bubbleURL);
 
@@ -226,7 +226,7 @@ app.post('/ask-question', async (req, res) => {
         // 🔥 Step 1: Fetch Relevant Data
         const bubbleURL = `${process.env.BUBBLE_API_URL}/transactions?constraints=[
             {"key":"Created By","constraint_type":"equals","value":"${userId}"}
-        ]`;
+        ]&sort_field=Date&sort_direction=descending&limit=100`;
 
         console.log("🌍 Fetching data from Bubble for question:", question);
 
@@ -281,14 +281,20 @@ app.post('/assistant', async (req, res) => {
         }
 
         // 🔥 Step 1: Fetch transactions with properly formatted URL
+        const today = new Date().toISOString().split('T')[0];
+        const ninetyDaysAgo = new Date(Date.now() - (90 * 24 * 60 * 60 * 1000)).toISOString().split('T')[0];
+        
         const constraints = JSON.stringify([
             {"key": "Created By", "constraint_type": "equals", "value": userId},
-            {"key": "is_pending?", "constraint_type": "equals", "value": "false"}
+            {"key": "is_pending?", "constraint_type": "equals", "value": "false"},
+            {"key": "Date", "constraint_type": "greater than", "value": ninetyDaysAgo},
+            {"key": "Date", "constraint_type": "less than", "value": today}
         ]);
         
-        const bubbleURL = `${process.env.BUBBLE_API_URL}/transactions?constraints=${encodeURIComponent(constraints)}&sort_field=Date&sort_direction=descending`;
+        const bubbleURL = `${process.env.BUBBLE_API_URL}/transactions?constraints=${encodeURIComponent(constraints)}&sort_field=Date&sort_direction=descending&limit=100`;
 
         console.log("🌍 Attempting to fetch from URL:", bubbleURL);
+        console.log("📅 Date range:", { ninetyDaysAgo, today });
 
         const transactionResponse = await axios.get(bubbleURL, {
             headers: { 'Authorization': `Bearer ${process.env.BUBBLE_API_KEY}` }
