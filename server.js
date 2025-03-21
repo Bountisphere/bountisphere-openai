@@ -294,7 +294,11 @@ app.post('/assistant', async (req, res) => {
         const bubbleURL = `${process.env.BUBBLE_API_URL}/transactions?constraints=${encodeURIComponent(constraints)}&sort_field=Date&sort_direction=descending&limit=100`;
 
         console.log("🌍 Attempting to fetch from URL:", bubbleURL);
-        console.log("📅 Date range:", { ninetyDaysAgo, today });
+        console.log("📅 Date range:", { 
+            startDate: ninetyDaysAgo,
+            endDate: today,
+            currentServerTime: new Date().toISOString()
+        });
 
         const transactionResponse = await axios.get(bubbleURL, {
             headers: { 'Authorization': `Bearer ${process.env.BUBBLE_API_KEY}` }
