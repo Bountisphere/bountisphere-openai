@@ -313,8 +313,13 @@ app.post('/assistant', async (req, res) => {
             console.log(`${index + 1}. Date: ${t.Date}, Amount: ${t.Amount}, Bank: ${t.Bank}, Description: ${t.Description}`);
         });
 
+        // Sort transactions by date to ensure we get the most recent ones
+        const sortedTransactions = [...transactions].sort((a, b) => {
+            return new Date(b.Date) - new Date(a.Date);
+        });
+
         // Take only the last 3 transactions
-        const recentTransactions = transactions.slice(0, 3);
+        const recentTransactions = sortedTransactions.slice(0, 3);
 
         // Format transactions for better readability with all Bubble fields
         const formattedTransactions = recentTransactions.map(t => ({
@@ -326,41 +331,41 @@ app.post('/assistant', async (req, res) => {
             
             // Dates and Timing
             date: t.Date ? new Date(t.Date).toLocaleString() : '',
-            date_day_of_month: t.Date_Day_of_Month,
+            date_day_of_month: t['Date / Day of Month'],
             month: t.Month,
             year: t.Year,
-            created_date: t.Created_Date,
-            modified_date: t.Modified_Date,
+            created_date: t['Created Date'],
+            modified_date: t['Modified Date'],
             
             // Categories and Types
-            category: t.Category || t['Category (Old)'] || 'Uncategorized',
-            category_description: t.Category_Description || '',
-            category_details: t.Category_Details || '',
-            transaction_type: t.Transaction_Type || '',
+            category: t['Category (Old)'] || t.Category || 'Uncategorized',
+            category_description: t['Category Description'] || '',
+            category_details: t['Category Details'] || '',
+            transaction_type: t['Transaction Type'] || '',
             
             // Description and Merchant
             description: t.Description || 'No description',
-            merchant_name: t.Merchant_Name || '',
+            merchant_name: t['Merchant Name'] || '',
             
             // Status Flags
-            is_pending: t.is_pending === 'yes',
-            manually_added: t.Manually_Added === 'yes',
+            is_pending: t['is_pending?'] === 'yes',
+            manually_added: t['Manually Added'] === 'yes',
             workflow_completed: t.workflow_completed === 'yes',
             
             // Additional Details
-            personal_finance_category: t.Personal_Finance_Category || '',
-            running_balance: t.Running_Balance,
+            personal_finance_category: t['Personal Finance Category'] || '',
+            running_balance: t['Running Balance'],
             notes: t.Notes || '',
             
             // System Fields
-            transaction_id: t.Transaction_ID || '',
-            unique_id: t.Unique_id || '',
+            transaction_id: t['Transaction ID'] || '',
+            unique_id: t['Unique Key'] || '',
             stream_id: t['stream id'] || '',
             
             // Additional Fields
-            transaction_frequency: t.Transaction_Frequency || '',
+            transaction_frequency: t['Transaction Frequency'] || '',
             account: t.Account || '',
-            account_holder: t.Account_Holder || '',
+            account_holder: t['Account Holder'] || '',
             account_holders_profile: t["Account Holder's Profile"] || ''
         }));
 
