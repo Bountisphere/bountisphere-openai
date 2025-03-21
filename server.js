@@ -242,16 +242,23 @@ app.post('/assistant', async (req, res) => {
                         description: t.Description
                     }));
 
-                    // Create a follow-up response with the function output
-                    const followUpResponse = await client.responses.create({
+                    // Return the response with tool outputs
+                    return res.json({
+                        id: response.id,
                         model: "gpt-4o-mini",
-                        input: `Here are the transactions you requested:\n${JSON.stringify(transactionSummary, null, 2)}\n\nOriginal question: ${input}`,
-                        instructions: "You are the Bountisphere Money Coach—a friendly, supportive, and expert financial assistant. Analyze the transactions provided and answer the user's question.",
-                        previous_response_id: response.id
+                        created_at: response.created_at,
+                        output: [
+                            {
+                                type: "tool_outputs",
+                                tool_outputs: [
+                                    {
+                                        tool_call_id: output.id,
+                                        output: JSON.stringify(transactionSummary)
+                                    }
+                                ]
+                            }
+                        ]
                     });
-
-                    console.log("✅ Follow-up response after providing transactions");
-                    return res.json(followUpResponse);
                 }
             }
         }
