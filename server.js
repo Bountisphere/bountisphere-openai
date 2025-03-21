@@ -31,83 +31,93 @@ app.post('/transactions', async (req, res) => {
             return res.status(400).json({ error: 'User ID is required' });
         }
 
-        // Build constraints array
+        // Build constraints array - start with just the user ID
         const constraints = [
-            {"key": "Created By", "constraint_type": "equals", "value": userId},
-            {"key": "is_pending?", "constraint_type": "equals", "value": "false"}
+            {"key": "Created By", "constraint_type": "equals", "value": userId}
         ];
 
-        // Add date range constraints if provided
-        if (startDate) {
-            constraints.push({"key": "Date", "constraint_type": "greater than or equal", "value": startDate});
-        }
-        if (endDate) {
-            constraints.push({"key": "Date", "constraint_type": "less than or equal", "value": endDate});
-        }
-
-        // Add a constraint to ensure we get recent transactions
-        const today = new Date().toISOString().split('T')[0];
-        constraints.push({"key": "Date", "constraint_type": "less than or equal", "value": today});
-
-        const bubbleURL = `${process.env.BUBBLE_API_URL}/transactions?constraints=${encodeURIComponent(JSON.stringify(constraints))}&sort_field=Date&sort_direction=descending&limit=100`;
+        const bubbleURL = `${process.env.BUBBLE_API_URL}/transactions?constraints=${encodeURIComponent(JSON.stringify(constraints))}&sort_field=Date&sort_direction=descending&limit=10`;
 
         console.log("🌍 Fetching transactions from:", bubbleURL);
-        console.log("📅 Current server date:", today);
         console.log("🔍 Constraints:", JSON.stringify(constraints, null, 2));
 
-        const response = await axios.get(bubbleURL, {
-            headers: { 'Authorization': `Bearer ${process.env.BUBBLE_API_KEY}` }
-        });
-
-        const transactions = response.data?.response?.results || [];
-        
-        // Add debug information
-        const debugInfo = {
-            totalTransactions: transactions.length,
-            dateRange: transactions.length > 0 ? {
-                earliest: transactions[transactions.length - 1].Date,
-                latest: transactions[0].Date,
-                currentServerTime: new Date().toISOString(),
-                requestedDateRange: {
-                    startDate: startDate || 'not specified',
-                    endDate: endDate || 'not specified',
-                    today: today
-                }
-            } : null,
-            query: {
+        try {
+            // Log the full request details
+            console.log("📤 Request details:", {
                 url: bubbleURL,
-                constraints,
-                userId,
-                rawResponse: response.data
-            },
-            userInfo: transactions.length > 0 ? {
-                providedUserId: userId,
-                transactionCreatedBy: transactions[0]['Created By'],
-                userEmail: transactions[0].User_Email || null,
-                firstTransactionDetails: {
-                    date: transactions[0].Date,
-                    createdDate: transactions[0].Created_Date,
-                    modifiedDate: transactions[0].Modified_Date
+                headers: {
+                    'Authorization': 'Bearer [REDACTED]'
+                }
+            });
+
+            const response = await axios.get(bubbleURL, {
+                headers: { 'Authorization': `Bearer ${process.env.BUBBLE_API_KEY}` }
+            });
+
+            // Log the full response
+            console.log("📥 Response status:", response.status);
+            console.log("📥 Response headers:", response.headers);
+            console.log("📥 Response data:", JSON.stringify(response.data, null, 2));
+
+            const transactions = response.data?.response?.results || [];
+            
+            // Add debug information
+            const debugInfo = {
+                totalTransactions: transactions.length,
+                dateRange: transactions.length > 0 ? {
+                    earliest: transactions[transactions.length - 1].Date,
+                    latest: transactions[0].Date,
+                    currentServerTime: new Date().toISOString()
+                } : null,
+                query: {
+                    url: bubbleURL,
+                    constraints,
+                    userId,
+                    rawResponse: response.data
                 },
-                rawUserFields: Object.fromEntries(
-                    Object.entries(transactions[0]).filter(([key]) => 
-                        key.toLowerCase().includes('user') || 
-                        key.toLowerCase().includes('email') ||
-                        key === 'Created By'
-                    )
-                )
-            } : null
-        };
+                userInfo: transactions.length > 0 ? {
+                    providedUserId: userId,
+                    transactionCreatedBy: transactions[0]['Created By'],
+                    userEmail: transactions[0].User_Email || null,
+                    firstTransactionDetails: {
+                        date: transactions[0].Date,
+                        createdDate: transactions[0].Created_Date,
+                        modifiedDate: transactions[0].Modified_Date
+                    }
+                } : null
+            };
 
-        console.log(`✅ Retrieved ${transactions.length} transactions`);
-        console.log("📊 Full debug info:", JSON.stringify(debugInfo, null, 2));
-        
-        res.json({
-            success: true,
-            transactions,
-            debug: debugInfo
-        });
+            console.log(`✅ Retrieved ${transactions.length} transactions`);
+            console.log("📊 Full debug info:", JSON.stringify(debugInfo, null, 2));
+            
+            res.json({
+                success: true,
+                transactions,
+                debug: debugInfo
+            });
 
+        } catch (error) {
+            console.error("❌ Error fetching transactions:", error.response?.data || error.message);
+            console.error("Full error:", error);
+            console.error("Error response:", error.response?.data);
+            console.error("Error status:", error.response?.status);
+            console.error("Error headers:", error.response?.headers);
+            console.error("Request URL:", error.config?.url);
+            console.error("Request method:", error.config?.method);
+            console.error("Request headers:", error.config?.headers);
+            
+            res.status(500).json({ 
+                error: 'Internal server error', 
+                details: error.message,
+                url: error.config?.url || 'URL not available',
+                response: error.response?.data,
+                status: error.response?.status,
+                requestDetails: {
+                    method: error.config?.method,
+                    headers: error.config?.headers ? Object.keys(error.config.headers) : null
+                }
+            });
+        }
     } catch (error) {
         console.error("❌ Error fetching transactions:", error.response?.data || error.message);
         console.error("Full error:", error);
