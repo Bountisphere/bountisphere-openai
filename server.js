@@ -174,7 +174,7 @@ app.post('/ask-question', async (req, res) => {
 // 🔹 OpenAI Responses API Endpoint
 app.post('/assistant', async (req, res) => {
     try {
-        const { input, tools } = req.body;
+        const { input } = req.body;
         const userId = req.query.userId;
 
         console.log("📥 Received request with userId:", userId);
@@ -186,7 +186,7 @@ app.post('/assistant', async (req, res) => {
         // 🔥 Step 1: Create the OpenAI response
         const response = await client.responses.create({
             model: "gpt-4o-mini",
-            tools: tools || [
+            tools: [
                 {
                     type: "file_search",
                     vector_store_ids: ["vs_JScHftFeKAv35y4QHPz9QwMb"]
@@ -242,21 +242,23 @@ app.post('/assistant', async (req, res) => {
                         description: t.Description
                     }));
 
-                    // Make a follow-up call to OpenAI with the tool outputs
-                    const followUpResponse = await client.responses.create({
+                    // Return the response with tool outputs
+                    return res.json({
+                        id: response.id,
                         model: "gpt-4o-mini",
-                        input: input,
-                        instructions: "You are the Bountisphere Money Coach—a friendly, supportive, and expert financial assistant. Analyze the transactions provided and answer the user's question.",
-                        previous_response_id: response.id,
-                        tool_responses: [
+                        created_at: response.created_at,
+                        output: [
                             {
-                                tool_call_id: output.id,
-                                output: JSON.stringify(transactionSummary)
+                                type: "tool_outputs",
+                                tool_outputs: [
+                                    {
+                                        tool_call_id: output.id,
+                                        output: JSON.stringify(transactionSummary)
+                                    }
+                                ]
                             }
                         ]
                     });
-
-                    return res.json(followUpResponse);
                 }
             }
         }
