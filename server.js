@@ -45,9 +45,15 @@ app.post('/transactions', async (req, res) => {
             constraints.push({"key": "Date", "constraint_type": "less than or equal", "value": endDate});
         }
 
-        const bubbleURL = `${process.env.BUBBLE_API_URL}/transactions?constraints=${encodeURIComponent(JSON.stringify(constraints))}&sort_field=Date&sort_direction=descending`;
+        // Add a constraint to ensure we get recent transactions
+        const today = new Date().toISOString().split('T')[0];
+        constraints.push({"key": "Date", "constraint_type": "less than or equal", "value": today});
+
+        const bubbleURL = `${process.env.BUBBLE_API_URL}/transactions?constraints=${encodeURIComponent(JSON.stringify(constraints))}&sort_field=Date&sort_direction=descending&limit=100`;
 
         console.log("🌍 Fetching transactions from:", bubbleURL);
+        console.log("📅 Current server date:", today);
+        console.log("🔍 Constraints:", JSON.stringify(constraints, null, 2));
 
         const response = await axios.get(bubbleURL, {
             headers: { 'Authorization': `Bearer ${process.env.BUBBLE_API_KEY}` }
@@ -64,7 +70,8 @@ app.post('/transactions', async (req, res) => {
                 currentServerTime: new Date().toISOString(),
                 requestedDateRange: {
                     startDate: startDate || 'not specified',
-                    endDate: endDate || 'not specified'
+                    endDate: endDate || 'not specified',
+                    today: today
                 }
             } : null,
             query: {
