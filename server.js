@@ -23,35 +23,6 @@ app.get('/', (req, res) => {
     res.send('🚀 Bountisphere OpenAI API is running!');
 });
 
-// 🔹 Fetch Transactions (Basic endpoint)
-app.post('/transactions', async (req, res) => {
-    try {
-        const { userId } = req.body;
-        if (!userId) {
-            return res.status(400).json({ error: 'User ID is required' });
-        }
-
-        const bubbleURL = `${process.env.BUBBLE_API_URL}/transactions?constraints=[
-            {"key":"Created By","constraint_type":"equals","value":"${userId}"},
-            {"key":"is_pending?","constraint_type":"equals","value":"false"}
-        ]&sort_field=Date&sort_direction=descending`;
-
-        console.log("🌍 Fetching transactions from:", bubbleURL);
-
-        const response = await axios.get(bubbleURL, {
-            headers: { 'Authorization': `Bearer ${process.env.BUBBLE_API_KEY}` }
-        });
-
-        const transactions = response.data?.response?.results || [];
-        console.log(`✅ Retrieved ${transactions.length} transactions`);
-        res.json(transactions);
-
-    } catch (error) {
-        console.error("❌ Error fetching transactions:", error.message);
-        res.status(500).json({ error: 'Internal server error' });
-    }
-});
-
 // 🔹 OpenAI Responses API Endpoint
 app.post('/assistant', async (req, res) => {
     try {
@@ -64,13 +35,16 @@ app.post('/assistant', async (req, res) => {
             return res.status(400).json({ error: 'User ID and input are required' });
         }
 
-        // 🔥 Step 1: Create the OpenAI response
-        const response = await client.responses.create({
+        // 🔥 Step 1: Initial OpenAI call
+        const response = await axios.post('https://api.openai.com/v1/responses', {
             model: "gpt-4o-mini",
             tools: [
                 {
                     type: "file_search",
                     vector_store_ids: ["vs_JScHftFeKAv35y4QHPz9QwMb"]
+                },
+                {
+                    type: "web_search_preview"
                 },
                 {
                     type: "function",
@@ -86,72 +60,65 @@ app.post('/assistant', async (req, res) => {
                         },
                         required: ["userId"]
                     }
-                },
-                {
-                    type: "web_search_preview"
                 }
             ],
-            input: `My user ID is ${userId}. ${input}`,
-            instructions: "You are the Bountisphere Money Coach—a friendly, supportive, and expert financial assistant. If the user's question involves transaction details, call the 'get_user_transactions' function with the userId provided in the prompt."
+            input: input,
+            instructions: `You are the Bountisphere Money Coach—a friendly, supportive, and expert financial assistant. If the user's question involves transaction details, call the 'get_user_transactions' function with the userId provided in the prompt. userId is '${userId}'.`
+        }, {
+            headers: {
+                'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
+                'Content-Type': 'application/json'
+            }
         });
 
-        console.log("✅ Initial OpenAI response received");
+        console.log("✅ Initial OpenAI response received:", response.data.id);
 
-        // 🔥 Step 2: Handle function calls if any
-        if (response.output && response.output.length > 0) {
-            for (const output of response.output) {
-                if (output.type === 'function_call' && output.name === 'get_user_transactions') {
-                    // Fetch transactions directly from Bubble
-                    const bubbleURL = `${process.env.BUBBLE_API_URL}/transactions?constraints=[
-                        {"key":"Created By","constraint_type":"equals","value":"${userId}"},
-                        {"key":"is_pending?","constraint_type":"equals","value":"false"}
-                    ]&sort_field=Date&sort_direction=descending&limit=3`;
+        // 🔥 Step 2: Handle function calls if present
+        const functionCall = response.data.output.find(out => out.type === 'function_call');
+        
+        if (functionCall && functionCall.name === 'get_user_transactions') {
+            // Fetch transactions from Bubble
+            const bubbleURL = `${process.env.BUBBLE_API_URL}/transactions?constraints=[
+                {"key":"Created By","constraint_type":"equals","value":"${userId}"},
+                {"key":"is_pending?","constraint_type":"equals","value":"false"}
+            ]&sort_field=Date&sort_direction=descending`;
 
-                    console.log("🌍 Fetching transactions for user:", userId);
+            const transactionResponse = await axios.get(bubbleURL, {
+                headers: { 'Authorization': `Bearer ${process.env.BUBBLE_API_KEY}` }
+            });
 
-                    const transactionResponse = await axios.get(bubbleURL, {
-                        headers: { 'Authorization': `Bearer ${process.env.BUBBLE_API_KEY}` }
-                    });
-
-                    const transactions = transactionResponse.data?.response?.results || [];
-                    console.log(`✅ Retrieved ${transactions.length} transactions`);
-
-                    // Create a summarized version of transactions
-                    const transactionSummary = transactions.slice(0, 3).map(t => ({
-                        date: t.Date,
-                        amount: t.Amount,
-                        description: t.Description
-                    }));
-
-                    // Return the response with tool outputs
-                    return res.json({
-                        id: response.id,
-                        model: "gpt-4o-mini",
-                        created_at: response.created_at,
-                        output: [
-                            {
-                                type: "tool_outputs",
-                                tool_outputs: [
-                                    {
-                                        tool_call_id: output.id,
-                                        output: JSON.stringify(transactionSummary)
-                                    }
-                                ]
-                            }
-                        ]
-                    });
+            const transactions = transactionResponse.data?.response?.results || [];
+            
+            // Send transactions back to OpenAI for analysis
+            const analysisResponse = await axios.post('https://api.openai.com/v1/responses', {
+                model: "gpt-4o-mini",
+                input: `Based on these transactions, ${input} Transactions: ${JSON.stringify(transactions)}`,
+                instructions: "Analyze the transactions and provide a clear, specific answer to the user's question."
+            }, {
+                headers: {
+                    'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
+                    'Content-Type': 'application/json'
                 }
-            }
+            });
+
+            return res.json({
+                success: true,
+                answer: analysisResponse.data.output[0]?.content || "Analysis completed",
+                transactions: transactions
+            });
         }
 
-        // If no function calls were made, return the initial response
-        res.json(response);
+        // If no function calls, return the initial response
+        res.json({
+            success: true,
+            answer: response.data.output[0]?.content || "No transaction analysis needed"
+        });
 
     } catch (error) {
-        console.error("❌ Error processing response request:", error.response?.data || error.message);
-        return res.status(500).json({
-            error: 'Internal server error',
-            details: error.response?.data || error.message
+        console.error("❌ Error:", error);
+        res.status(500).json({
+            success: false,
+            error: 'Internal server error'
         });
     }
 });
