@@ -196,27 +196,91 @@ app.post('/assistant', async (req, res) => {
         });
 
         const transactions = transactionResponse.data?.response?.results || [];
-        console.log(`✅ Retrieved ${transactions.length} transactions`);
+        
+        // Debug: Log all transaction dates
+        console.log("📊 All transaction dates:");
+        transactions.forEach((t, index) => {
+            console.log(`${index + 1}. Date: ${t.Date}, Amount: ${t.Amount}, Description: ${t.Description}`);
+        });
 
         // Take only the last 3 transactions
         const recentTransactions = transactions.slice(0, 3);
+        
+        console.log("🔍 Selected transactions:");
+        recentTransactions.forEach((t, index) => {
+            console.log(`${index + 1}. Date: ${t.Date}, Amount: ${t.Amount}, Description: ${t.Description}`);
+        });
 
-        // Format transactions for better readability
+        // Format transactions for better readability with all Bubble fields
         const formattedTransactions = recentTransactions.map(t => ({
-            date: new Date(t.Date).toLocaleDateString(),
-            description: t.Description,
-            amount: t.Amount.toFixed(2),
-            merchant: t.Merchant || 'Unknown',
-            category: t.Category || 'Uncategorized'
+            // Core Transaction Details
+            account_id: t.Account_ID,
+            amount: parseFloat(t.Amount).toFixed(2),
+            bank: t.Bank || '',
+            currency: t.Currency_Code || 'USD',
+            
+            // Dates and Timing
+            date: new Date(t.Date).toLocaleString(),
+            date_day_of_month: t.Date_Day_of_Month,
+            month: t.Month,
+            year: t.Year,
+            created_date: t.Created_Date,
+            modified_date: t.Modified_Date,
+            
+            // Categories and Types
+            category: t.Category || 'Uncategorized',
+            category_description: t.Category_Description || '',
+            category_details: t.Category_Details || '',
+            transaction_type: t.Transaction_Type || '',
+            
+            // Description and Merchant
+            description: t.Description || 'No description',
+            merchant: t.Merchant_Name || '',
+            
+            // Status Flags
+            is_pending: t.is_pending === 'yes',
+            manually_added: t.Manually_Added === 'yes',
+            workflow_completed: t.Workflow_completed === 'yes',
+            
+            // Additional Details
+            personal_finance_category: t.Personal_Finance_Category || '',
+            running_balance: t.Running_Balance,
+            notes: t.Notes || '',
+            
+            // System Fields
+            transaction_id: t.Transaction_ID || '',
+            unique_id: t.Unique_id || '',
+            stream_id: t.Stream_id || ''
         }));
 
-        // 🔥 Step 2: Send to OpenAI for analysis
+        // Add debug information to the response
+        const debugInfo = {
+            totalTransactions: transactions.length,
+            dateRange: transactions.length > 0 ? {
+                earliest: new Date(transactions[transactions.length - 1].Date).toISOString(),
+                latest: new Date(transactions[0].Date).toISOString(),
+                currentServerTime: new Date().toISOString()
+            } : null,
+            query: {
+                url: bubbleURL,
+                userId: userId
+            }
+        };
+
+        // Enhance OpenAI's system prompt with more context
         const openAIResponse = await client.chat.completions.create({
             model: "gpt-4",
             messages: [
                 {
                     role: "system",
-                    content: "You are the Bountisphere Money Coach—a friendly, supportive, and expert financial assistant. Analyze the user's transactions and provide helpful insights based on their questions."
+                    content: "You are the Bountisphere Money Coach—a friendly, supportive, and expert financial assistant. When analyzing transactions:\n" +
+                            "1. Include the bank name and transaction type\n" +
+                            "2. Use the category and category description for context\n" +
+                            "3. Format amounts with currency codes\n" +
+                            "4. Include transaction dates and times\n" +
+                            "5. Note if transactions are pending or manually added\n" +
+                            "6. Consider the personal finance category for insights\n" +
+                            "7. Include relevant transaction notes if available"
                 },
                 {
                     role: "user",
@@ -226,11 +290,12 @@ app.post('/assistant', async (req, res) => {
             temperature: 0.7
         });
 
-        // 🔥 Step 3: Return formatted response
+        // 🔥 Step 3: Return formatted response with debug info
         return res.json({
             success: true,
             answer: openAIResponse.choices[0].message.content,
-            transactions: formattedTransactions
+            transactions: formattedTransactions,
+            debug: debugInfo
         });
 
     } catch (error) {
