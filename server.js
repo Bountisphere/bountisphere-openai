@@ -332,52 +332,26 @@ app.post('/assistant', async (req, res) => {
             console.log(`${index + 1}. Date: ${t.Date}, Amount: ${t.Amount}, Description: ${t.Description}`);
         });
 
-        // Format all transactions for better readability with all Bubble fields
+        // Format transactions for better readability with all Bubble fields
         const formattedTransactions = sortedTransactions.map(t => ({
-            // Core Transaction Details
-            account_id: t.Account_ID,
+            // Core Transaction Details - only include essential fields
+            date: t.Date ? new Date(t.Date).toLocaleString() : '',
             amount: parseFloat(t.Amount).toFixed(2),
             bank: t.Bank || '',
-            currency_code: t.Currency_Code || 'USD',
-            
-            // Dates and Timing
-            date: t.Date ? new Date(t.Date).toLocaleString() : '',
-            date_day_of_month: t['Date / Day of Month'],
-            month: t.Month,
-            year: t.Year,
-            created_date: t['Created Date'],
-            modified_date: t['Modified Date'],
+            description: t.Description || 'No description',
             
             // Categories and Types
             category: t['Category (Old)'] || t.Category || 'Uncategorized',
             category_description: t['Category Description'] || '',
-            category_details: t['Category Details'] || '',
             transaction_type: t['Transaction Type'] || '',
-            
-            // Description and Merchant
-            description: t.Description || 'No description',
-            merchant_name: t['Merchant Name'] || '',
             
             // Status Flags
             is_pending: t['is_pending?'] === 'yes',
             manually_added: t['Manually Added'] === 'yes',
-            workflow_completed: t.workflow_completed === 'yes',
             
             // Additional Details
             personal_finance_category: t['Personal Finance Category'] || '',
-            running_balance: t['Running Balance'],
-            notes: t.Notes || '',
-            
-            // System Fields
-            transaction_id: t['Transaction ID'] || '',
-            unique_id: t['Unique Key'] || '',
-            stream_id: t['stream id'] || '',
-            
-            // Additional Fields
-            transaction_frequency: t['Transaction Frequency'] || '',
-            account: t.Account || '',
-            account_holder: t['Account Holder'] || '',
-            account_holders_profile: t["Account Holder's Profile"] || ''
+            transaction_frequency: t['Transaction Frequency'] || ''
         }));
 
         // Add debug information to the response
@@ -396,19 +370,7 @@ app.post('/assistant', async (req, res) => {
                 url: bubbleURL,
                 constraints: JSON.parse(constraints),
                 userId
-            },
-            userInfo: transactions.length > 0 ? {
-                providedUserId: userId,
-                transactionCreatedBy: transactions[0]['Created By'],
-                userEmail: transactions[0].User_Email || null,
-                rawUserFields: Object.fromEntries(
-                    Object.entries(transactions[0]).filter(([key]) => 
-                        key.toLowerCase().includes('user') || 
-                        key.toLowerCase().includes('email') ||
-                        key === 'Created By'
-                    )
-                )
-            } : null
+            }
         };
 
         // 🔥 Step 2: Send to OpenAI for analysis with enhanced prompt
@@ -418,15 +380,14 @@ app.post('/assistant', async (req, res) => {
                 {
                     role: "system",
                     content: "You are the Bountisphere Money Coach—a friendly, supportive, and expert financial assistant. When analyzing transactions:\n" +
-                            "1. Include the bank name and transaction type\n" +
-                            "2. Use the category and category description for context\n" +
-                            "3. Format amounts with currency codes\n" +
-                            "4. Include transaction dates and times\n" +
+                            "1. Focus on the most recent and relevant transactions\n" +
+                            "2. Include bank names and transaction types\n" +
+                            "3. Use categories and descriptions for context\n" +
+                            "4. Format amounts with currency codes\n" +
                             "5. Note if transactions are pending or manually added\n" +
                             "6. Consider the personal finance category for insights\n" +
-                            "7. Include relevant transaction notes if available\n" +
-                            "8. When analyzing multiple transactions, look for patterns and trends\n" +
-                            "9. Consider the full date range of transactions when answering questions"
+                            "7. Look for patterns and trends across transactions\n" +
+                            "8. Consider the full date range when answering questions"
                 },
                 {
                     role: "user",
