@@ -340,31 +340,90 @@ app.post('/assistant', async (req, res) => {
             const transactions = transactionResponse.data?.response?.results || [];
             console.log(`✅ Retrieved ${transactions.length} transactions`);
             
-            // Debug: Log all transaction dates with more details
-            console.log("📊 All transaction dates with details:");
-            transactions.forEach((t, index) => {
-                const transactionDate = new Date(t.Date);
-                const isMarch = transactionDate.getMonth() === 2; // March is month 2 (0-based)
-                console.log(`${index + 1}. Date: ${t.Date} (${transactionDate.toLocaleString()}), Amount: ${t.Amount}, Bank: ${t.Bank}, Description: ${t.Description}, Month: ${t.Month}, Year: ${t.Year}, is_pending: ${t['is_pending?']}, isMarch: ${isMarch}`);
-            });
-
-            // Log transactions by month and year
-            const transactionsByMonthYear = transactions.reduce((acc, t) => {
-                const monthYear = `${t.Month} ${t.Year}`;
+            // Enhanced debugging: Transaction date distribution
+            const dateDistribution = transactions.reduce((acc, t) => {
+                const date = new Date(t.Date);
+                const monthYear = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
                 if (!acc[monthYear]) {
-                    acc[monthYear] = [];
+                    acc[monthYear] = {
+                        count: 0,
+                        examples: [],
+                        totalAmount: 0
+                    };
                 }
-                acc[monthYear].push(t);
+                acc[monthYear].count++;
+                acc[monthYear].totalAmount += parseFloat(t.Amount) || 0;
+                if (acc[monthYear].examples.length < 3) {
+                    acc[monthYear].examples.push({
+                        date: t.Date,
+                        description: t.Description,
+                        amount: t.Amount,
+                        bank: t.Bank
+                    });
+                }
                 return acc;
             }, {});
 
-            console.log("\n📅 Transactions by month and year:");
-            Object.entries(transactionsByMonthYear).forEach(([monthYear, txs]) => {
-                console.log(`${monthYear}: ${txs.length} transactions`);
-                txs.slice(0, 3).forEach(t => {
-                    console.log(`  - ${t.Date}: ${t.Amount} - ${t.Description}`);
+            console.log("\n📊 Transaction Distribution by Month:");
+            Object.entries(dateDistribution)
+                .sort((a, b) => b[0].localeCompare(a[0])) // Sort by date descending
+                .forEach(([monthYear, data]) => {
+                    console.log(`\n${monthYear}:`);
+                    console.log(`  Total Transactions: ${data.count}`);
+                    console.log(`  Total Amount: $${data.totalAmount.toFixed(2)}`);
+                    console.log('  Example Transactions:');
+                    data.examples.forEach(ex => 
+                        console.log(`    - ${ex.date}: $${ex.amount} - ${ex.description} (${ex.bank})`)
+                    );
                 });
+
+            // Debug: Date range analysis
+            const dates = transactions.map(t => new Date(t.Date));
+            const earliestDate = new Date(Math.min(...dates));
+            const latestDate = new Date(Math.max(...dates));
+            
+            console.log("\n📅 Date Range Analysis:");
+            console.log({
+                requestedRange: {
+                    start: startDate,
+                    end: endDate,
+                    daysRequested: (new Date(endDate) - new Date(startDate)) / (1000 * 60 * 60 * 24)
+                },
+                actualRange: {
+                    earliest: earliestDate.toISOString(),
+                    latest: latestDate.toISOString(),
+                    daysSpanned: (latestDate - earliestDate) / (1000 * 60 * 60 * 24)
+                },
+                currentTime: {
+                    server: new Date().toISOString(),
+                    serverTimezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+                    utcOffset: new Date().getTimezoneOffset()
+                }
             });
+
+            // Enhanced transaction validation
+            const validationResults = transactions.reduce((acc, t) => {
+                // Check for potential date issues
+                const transactionDate = new Date(t.Date);
+                const isDateValid = !isNaN(transactionDate);
+                const isFutureDate = isDateValid && transactionDate > now;
+                const isWithinRange = isDateValid && 
+                    transactionDate >= new Date(startDate) && 
+                    transactionDate <= new Date(endDate);
+
+                // Track validation results
+                if (!isDateValid) acc.invalidDates.push(t.Date);
+                if (isFutureDate) acc.futureDates.push(t.Date);
+                if (!isWithinRange && isDateValid) acc.outOfRangeDates.push(t.Date);
+                
+                return acc;
+            }, { invalidDates: [], futureDates: [], outOfRangeDates: [] });
+
+            console.log("\n🔍 Transaction Validation Results:", 
+                Object.entries(validationResults)
+                    .filter(([_, arr]) => arr.length > 0)
+                    .reduce((acc, [key, value]) => ({ ...acc, [key]: value }), {})
+            );
 
             // Sort transactions by date to ensure we get the most recent ones
             const sortedTransactions = [...transactions].sort((a, b) => {
@@ -393,8 +452,8 @@ app.post('/assistant', async (req, res) => {
                     latest: transactions[0].Date,
                     currentServerTime: new Date().toISOString(),
                     requestedDateRange: {
-                        startDate: ninetyDaysAgo,
-                        endDate: today
+                        startDate,
+                        endDate
                     }
                 } : null,
                 query: {
