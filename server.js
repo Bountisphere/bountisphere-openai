@@ -337,14 +337,17 @@ app.post('/assistant', async (req, res) => {
             let allTransactions = [];
             let cursor = 0;
             let hasMore = true;
+            let pageCount = 0;
+            const MAX_PAGES = 3; // Limit to 3 pages to prevent timeout
 
-            // Fetch all pages of transactions
-            while (hasMore) {
+            // Fetch transactions with pagination
+            while (hasMore && pageCount < MAX_PAGES) {
                 const pageURL = `${bubbleURL}&cursor=${cursor}`;
-                console.log(`🔄 Fetching page with cursor: ${cursor}`);
+                console.log(`🔄 Fetching page ${pageCount + 1} with cursor: ${cursor}`);
 
                 const transactionResponse = await axios.get(pageURL, {
-                    headers: { 'Authorization': `Bearer ${process.env.BUBBLE_API_KEY}` }
+                    headers: { 'Authorization': `Bearer ${process.env.BUBBLE_API_KEY}` },
+                    timeout: 10000 // 10 second timeout for each request
                 });
 
                 const pageTransactions = transactionResponse.data?.response?.results || [];
@@ -354,49 +357,42 @@ app.post('/assistant', async (req, res) => {
                 const remaining = transactionResponse.data?.response?.remaining || 0;
                 cursor = transactionResponse.data?.response?.cursor || 0;
                 hasMore = remaining > 0;
+                pageCount++;
 
-                console.log(`📊 Page stats:`, {
+                console.log(`📊 Page ${pageCount} stats:`, {
                     newTransactions: pageTransactions.length,
                     totalSoFar: allTransactions.length,
                     remaining,
-                    cursor
+                    cursor,
+                    hasMore
                 });
+
+                // Break early if we have enough recent transactions
+                if (allTransactions.length >= 200) {
+                    console.log("📈 Reached sufficient transactions (200+), stopping pagination");
+                    break;
+                }
             }
 
-            console.log(`✅ Retrieved ${allTransactions.length} total transactions`);
+            console.log(`✅ Retrieved ${allTransactions.length} total transactions across ${pageCount} pages`);
             
-            // Sort transactions by date (newest first)
+            // Sort all transactions by date (newest first)
             const sortedTransactions = allTransactions.sort((a, b) => {
                 return new Date(b.Date) - new Date(a.Date);
             });
 
-            // Group transactions by month for analysis
-            const monthGroups = sortedTransactions.reduce((acc, t) => {
+            // Take the 50 most recent transactions for GPT-4
+            const recentTransactions = sortedTransactions.slice(0, 50);
+
+            // Quick month analysis of recent transactions
+            const monthCounts = recentTransactions.reduce((acc, t) => {
                 const date = new Date(t.Date);
-                const monthKey = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
-                if (!acc[monthKey]) {
-                    acc[monthKey] = [];
-                }
-                acc[monthKey].push(t);
+                const monthYear = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+                acc[monthYear] = (acc[monthYear] || 0) + 1;
                 return acc;
             }, {});
 
-            // Log detailed month analysis
-            console.log("\n📅 Transaction Analysis by Month:");
-            Object.entries(monthGroups)
-                .sort((a, b) => b[0].localeCompare(a[0]))
-                .forEach(([month, transactions]) => {
-                    console.log(`\n${month}:`);
-                    console.log(`  Count: ${transactions.length}`);
-                    console.log(`  Date Range: ${new Date(transactions[0].Date).toISOString()} to ${new Date(transactions[transactions.length-1].Date).toISOString()}`);
-                    console.log(`  Sample Transactions:`);
-                    transactions.slice(0, 3).forEach(t => {
-                        console.log(`    - ${t.Date}: ${t.Amount} (${t.Description})`);
-                    });
-                });
-
-            // Take the 50 most recent transactions for GPT-4
-            const recentTransactions = sortedTransactions.slice(0, 50);
+            console.log("\n📅 Recent Transactions by Month:", monthCounts);
 
             // Format transactions with minimal fields for GPT-4
             const formattedTransactions = recentTransactions.map(t => ({
@@ -410,17 +406,22 @@ app.post('/assistant', async (req, res) => {
 
             // Add debug information to the response
             const debugInfo = {
-                totalTransactions: transactions.length,
+                totalTransactions: allTransactions.length,
                 recentTransactionsUsed: recentTransactions.length,
-                dateRange: transactions.length > 0 ? {
-                    earliest: transactions[transactions.length - 1].Date,
-                    latest: transactions[0].Date,
+                paginationInfo: {
+                    pagesRetrieved: pageCount,
+                    hasMorePages: hasMore
+                },
+                dateRange: recentTransactions.length > 0 ? {
+                    earliest: recentTransactions[recentTransactions.length - 1].Date,
+                    latest: recentTransactions[0].Date,
                     currentServerTime: new Date().toISOString(),
                     requestedDateRange: {
                         startDate,
                         endDate
                     }
                 } : null,
+                monthDistribution: monthCounts,
                 query: {
                     url: bubbleURL,
                     constraints: JSON.parse(constraints),
