@@ -272,7 +272,7 @@ app.post('/ask-question', async (req, res) => {
 app.post('/assistant', async (req, res) => {
     try {
         const { input } = req.body;
-        const userId = req.query.userId?.trim(); // Remove any whitespace or newlines
+        const userId = req.query.userId?.trim();
 
         console.log("📥 Received request with userId:", userId);
 
@@ -280,123 +280,128 @@ app.post('/assistant', async (req, res) => {
             return res.status(400).json({ error: 'User ID and input are required' });
         }
 
-        // 🔥 Step 1: Fetch transactions with properly formatted URL
-        const now = new Date();
-        
         // Format dates to match Bubble's ISO format
         function formatDateForBubble(date) {
-            return date.toISOString().split('.')[0] + '.000Z';  // Format: YYYY-MM-DDTHH:mm:ss.000Z
+            return date.toISOString();
         }
 
         // Add one day to ensure we include today's transactions
+        const now = new Date();
         const tomorrow = new Date(now);
         tomorrow.setDate(tomorrow.getDate() + 1);
-        tomorrow.setHours(23, 59, 59, 999);  // End of day in local time
+        tomorrow.setHours(23, 59, 59, 999);
         const endDate = formatDateForBubble(tomorrow);
         
-        // Go back 90 days from tomorrow to ensure full coverage
+        // Go back 90 days from tomorrow
         const ninetyDaysAgo = new Date(tomorrow);
         ninetyDaysAgo.setDate(ninetyDaysAgo.getDate() - 90);
-        ninetyDaysAgo.setHours(0, 0, 0, 0);  // Start of day in local time
+        ninetyDaysAgo.setHours(0, 0, 0, 0);
         const startDate = formatDateForBubble(ninetyDaysAgo);
-        
-        // Log the date calculations
+
         console.log("📅 Date calculations:", {
-            now: {
-                iso: now.toISOString(),
-                local: now.toLocaleString(),
-                date: now.toLocaleDateString(),
-                timestamp: now.getTime()
-            },
-            queryRange: {
-                start: startDate,
-                end: endDate,
-                explanation: "Using Bubble's ISO format with supported operators"
-            }
+            now: now.toISOString(),
+            startDate,
+            endDate,
+            explanation: "Using 90-day range with full ISO timestamps"
         });
-        
+
+        // Initialize arrays and tracking variables
+        let allTransactions = [];
+        let cursor = null;
+        let hasMore = true;
+        let pageCount = 0;
+        const MAX_PAGES = 10; // Increased to ensure we get more transactions
+        const TRANSACTIONS_PER_PAGE = 100;
+
         // Use supported constraint types with ISO dates
-        const constraints = JSON.stringify([
+        const baseConstraints = [
             {"key": "Created By", "constraint_type": "equals", "value": userId},
             {"key": "Date", "constraint_type": "greater than", "value": startDate},
             {"key": "Date", "constraint_type": "less than", "value": endDate}
-        ]);
-        
-        // Increase limit to ensure we get all transactions
-        const bubbleURL = `${process.env.BUBBLE_API_URL}/transactions?constraints=${encodeURIComponent(constraints)}&sort_field=Date&sort_direction=descending&limit=200`;
-
-        console.log("🌍 Attempting to fetch from URL:", bubbleURL);
-        console.log("📅 Date range:", { 
-            startDate,
-            endDate,
-            currentServerTime: new Date().toISOString()
-        });
+        ];
 
         try {
-            // Initialize arrays to store all transactions
-            let allTransactions = [];
-            let cursor = 0;
-            let hasMore = true;
-            let pageCount = 0;
-            const MAX_PAGES = 3; // Limit to 3 pages to prevent timeout
-
-            // Fetch transactions with pagination
+            // Fetch all pages of transactions
             while (hasMore && pageCount < MAX_PAGES) {
-                const pageURL = `${bubbleURL}&cursor=${cursor}`;
-                console.log(`🔄 Fetching page ${pageCount + 1} with cursor: ${cursor}`);
+                const constraints = [...baseConstraints];
+                const cursorParam = cursor ? `&cursor=${cursor}` : '';
+                const bubbleURL = `${process.env.BUBBLE_API_URL}/transactions?constraints=${encodeURIComponent(JSON.stringify(constraints))}&sort_field=Date&sort_direction=descending&limit=${TRANSACTIONS_PER_PAGE}${cursorParam}`;
 
-                const transactionResponse = await axios.get(pageURL, {
+                console.log(`🔄 Fetching page ${pageCount + 1} with cursor:`, cursor || 'initial');
+
+                const response = await axios.get(bubbleURL, {
                     headers: { 'Authorization': `Bearer ${process.env.BUBBLE_API_KEY}` },
-                    timeout: 10000 // 10 second timeout for each request
+                    timeout: 15000 // 15 second timeout
                 });
 
-                const pageTransactions = transactionResponse.data?.response?.results || [];
-                allTransactions = [...allTransactions, ...pageTransactions];
+                const pageTransactions = response.data?.response?.results || [];
                 
-                // Check if there are more pages
-                const remaining = transactionResponse.data?.response?.remaining || 0;
-                cursor = transactionResponse.data?.response?.cursor || 0;
-                hasMore = remaining > 0;
+                // Group transactions by month for logging
+                const monthGroups = pageTransactions.reduce((acc, t) => {
+                    const date = new Date(t.Date);
+                    const key = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+                    acc[key] = (acc[key] || 0) + 1;
+                    return acc;
+                }, {});
+
+                console.log(`📊 Page ${pageCount + 1} transactions by month:`, monthGroups);
+                
+                allTransactions = [...allTransactions, ...pageTransactions];
+                cursor = response.data?.response?.cursor;
+                hasMore = response.data?.response?.remaining > 0;
                 pageCount++;
 
-                console.log(`📊 Page ${pageCount} stats:`, {
+                console.log(`📈 Progress:`, {
+                    page: pageCount,
                     newTransactions: pageTransactions.length,
                     totalSoFar: allTransactions.length,
-                    remaining,
-                    cursor,
-                    hasMore
+                    hasMore,
+                    nextCursor: cursor
                 });
 
-                // Break early if we have enough recent transactions
-                if (allTransactions.length >= 200) {
-                    console.log("📈 Reached sufficient transactions (200+), stopping pagination");
+                // Break if we have enough recent transactions
+                if (allTransactions.length >= 500) {
+                    console.log("📈 Reached 500 transactions, stopping pagination");
                     break;
                 }
             }
 
-            console.log(`✅ Retrieved ${allTransactions.length} total transactions across ${pageCount} pages`);
-            
             // Sort all transactions by date (newest first)
             const sortedTransactions = allTransactions.sort((a, b) => {
                 return new Date(b.Date) - new Date(a.Date);
             });
 
-            // Take the 50 most recent transactions for GPT-4
-            const recentTransactions = sortedTransactions.slice(0, 50);
-
-            // Quick month analysis of recent transactions
-            const monthCounts = recentTransactions.reduce((acc, t) => {
+            // Analyze transactions by month
+            const monthlyStats = sortedTransactions.reduce((acc, t) => {
                 const date = new Date(t.Date);
-                const monthYear = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
-                acc[monthYear] = (acc[monthYear] || 0) + 1;
+                const monthKey = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+                if (!acc[monthKey]) {
+                    acc[monthKey] = {
+                        count: 0,
+                        total: 0,
+                        transactions: []
+                    };
+                }
+                acc[monthKey].count++;
+                acc[monthKey].total += parseFloat(t.Amount) || 0;
+                if (acc[monthKey].transactions.length < 3) { // Keep first 3 transactions as examples
+                    acc[monthKey].transactions.push({
+                        date: t.Date,
+                        amount: t.Amount,
+                        description: t.Description
+                    });
+                }
                 return acc;
             }, {});
 
-            console.log("\n📅 Recent Transactions by Month:", monthCounts);
+            console.log("📊 Monthly Transaction Stats:", monthlyStats);
 
-            // Format transactions with minimal fields for GPT-4
+            // Take the 50 most recent transactions for GPT-4
+            const recentTransactions = sortedTransactions.slice(0, 50);
+
+            // Format transactions for GPT-4
             const formattedTransactions = recentTransactions.map(t => ({
-                date: t.Date ? new Date(t.Date).toLocaleString() : '',
+                date: new Date(t.Date).toLocaleString(),
                 amount: parseFloat(t.Amount).toFixed(2),
                 bank: t.Bank || '',
                 description: t.Description || 'No description',
@@ -404,90 +409,60 @@ app.post('/assistant', async (req, res) => {
                 is_pending: t['is_pending?'] || 'false'
             }));
 
-            // Add debug information to the response
-            const debugInfo = {
-                totalTransactions: allTransactions.length,
-                recentTransactionsUsed: recentTransactions.length,
-                paginationInfo: {
-                    pagesRetrieved: pageCount,
-                    hasMorePages: hasMore
-                },
-                dateRange: recentTransactions.length > 0 ? {
-                    earliest: recentTransactions[recentTransactions.length - 1].Date,
-                    latest: recentTransactions[0].Date,
-                    currentServerTime: new Date().toISOString(),
-                    requestedDateRange: {
-                        startDate,
-                        endDate
-                    }
-                } : null,
-                monthDistribution: monthCounts,
-                query: {
-                    url: bubbleURL,
-                    constraints: JSON.parse(constraints),
-                    userId
-                }
-            };
-
-            // 🔥 Step 2: Send to OpenAI for analysis with enhanced prompt
+            // Send to OpenAI for analysis
             const openAIResponse = await client.chat.completions.create({
                 model: "gpt-4",
                 messages: [
                     {
                         role: "system",
-                        content: "You are the Bountisphere Money Coach—a friendly, supportive, and expert financial assistant. When analyzing transactions:\n" +
-                                "1. Focus on the most recent and relevant transactions\n" +
-                                "2. Include bank names and transaction types\n" +
-                                "3. Use categories for context\n" +
-                                "4. Format amounts with currency codes\n" +
-                                "5. Look for patterns and trends across transactions\n" +
-                                "6. Consider the full date range when answering questions"
+                        content: "You are the Bountisphere Money Coach. Analyze the transactions and provide insights about spending patterns, focusing on the most recent transactions first."
                     },
                     {
                         role: "user",
-                        content: `Please analyze these transactions and answer the following question: ${input}\n\nTransactions: ${JSON.stringify(formattedTransactions, null, 2)}`
+                        content: `Please analyze these transactions and answer: ${input}\n\nTransactions: ${JSON.stringify(formattedTransactions, null, 2)}`
                     }
                 ],
                 temperature: 0.7
             });
 
-            // 🔥 Step 3: Return formatted response with debug info
             return res.json({
                 success: true,
                 answer: openAIResponse.choices[0].message.content,
                 transactions: formattedTransactions,
-                debug: debugInfo
+                debug: {
+                    totalTransactions: allTransactions.length,
+                    recentTransactionsUsed: formattedTransactions.length,
+                    paginationInfo: {
+                        pagesRetrieved: pageCount,
+                        hasMorePages: hasMore,
+                        transactionsPerPage: TRANSACTIONS_PER_PAGE
+                    },
+                    dateRange: {
+                        earliest: sortedTransactions[sortedTransactions.length - 1]?.Date,
+                        latest: sortedTransactions[0]?.Date,
+                        currentServerTime: new Date().toISOString(),
+                        requestedDateRange: {
+                            startDate,
+                            endDate
+                        }
+                    },
+                    monthlyStats,
+                    query: {
+                        constraints: baseConstraints,
+                        userId
+                    }
+                }
             });
 
         } catch (error) {
-            console.error("❌ Error fetching transactions:", error.response?.data || error.message);
-            console.error("Full error:", error);
-            console.error("Error response:", error.response?.data);
-            console.error("Error status:", error.response?.status);
-            console.error("Error headers:", error.response?.headers);
-            console.error("Request URL:", error.config?.url);
-            console.error("Request method:", error.config?.method);
-            console.error("Request headers:", error.config?.headers);
-            
-            res.status(500).json({ 
-                error: 'Internal server error', 
-                details: error.message,
-                url: error.config?.url || 'URL not available',
-                response: error.response?.data,
-                status: error.response?.status,
-                requestDetails: {
-                    method: error.config?.method,
-                    headers: error.config?.headers ? Object.keys(error.config.headers) : null
-                }
-            });
+            console.error("❌ Error fetching transactions:", error);
+            throw error;
         }
     } catch (error) {
-        console.error("❌ Error in /assistant endpoint:", error.response?.data || error.message);
-        console.error("Full error:", error);
+        console.error("❌ Error in /assistant endpoint:", error);
         res.status(500).json({ 
             error: 'Internal server error', 
             details: error.message,
-            url: error.config?.url || 'URL not available',
             stack: error.stack
         });
     }
