@@ -284,11 +284,25 @@ app.post('/assistant', async (req, res) => {
         const today = new Date().toISOString().split('T')[0];
         const ninetyDaysAgo = new Date(Date.now() - (90 * 24 * 60 * 60 * 1000)).toISOString().split('T')[0];
         
+        // Log the date calculations
+        console.log("📅 Date calculations:", {
+            today: {
+                iso: today,
+                full: new Date().toISOString(),
+                local: new Date().toLocaleString()
+            },
+            ninetyDaysAgo: {
+                iso: ninetyDaysAgo,
+                full: new Date(Date.now() - (90 * 24 * 60 * 60 * 1000)).toISOString(),
+                local: new Date(Date.now() - (90 * 24 * 60 * 60 * 1000)).toLocaleString()
+            }
+        });
+        
         const constraints = JSON.stringify([
             {"key": "Created By", "constraint_type": "equals", "value": userId},
             {"key": "is_pending?", "constraint_type": "equals", "value": "false"},
-            {"key": "Date", "constraint_type": "greater than", "value": ninetyDaysAgo},
-            {"key": "Date", "constraint_type": "less than", "value": today}
+            {"key": "Date", "constraint_type": "greater than or equal", "value": ninetyDaysAgo},
+            {"key": "Date", "constraint_type": "less than or equal", "value": today}
         ]);
         
         const bubbleURL = `${process.env.BUBBLE_API_URL}/transactions?constraints=${encodeURIComponent(constraints)}&sort_field=Date&sort_direction=descending&limit=100`;
@@ -314,19 +328,19 @@ app.post('/assistant', async (req, res) => {
             console.log(`${index + 1}. Date: ${t.Date} (${transactionDate.toLocaleString()}), Amount: ${t.Amount}, Bank: ${t.Bank}, Description: ${t.Description}, Month: ${t.Month}, Year: ${t.Year}`);
         });
 
-        // Log transactions by month
-        const transactionsByMonth = transactions.reduce((acc, t) => {
-            const month = t.Month;
-            if (!acc[month]) {
-                acc[month] = [];
+        // Log transactions by month and year
+        const transactionsByMonthYear = transactions.reduce((acc, t) => {
+            const monthYear = `${t.Month} ${t.Year}`;
+            if (!acc[monthYear]) {
+                acc[monthYear] = [];
             }
-            acc[month].push(t);
+            acc[monthYear].push(t);
             return acc;
         }, {});
 
-        console.log("\n📅 Transactions by month:");
-        Object.entries(transactionsByMonth).forEach(([month, txs]) => {
-            console.log(`${month}: ${txs.length} transactions`);
+        console.log("\n📅 Transactions by month and year:");
+        Object.entries(transactionsByMonthYear).forEach(([monthYear, txs]) => {
+            console.log(`${monthYear}: ${txs.length} transactions`);
             txs.slice(0, 3).forEach(t => {
                 console.log(`  - ${t.Date}: ${t.Amount} - ${t.Description}`);
             });
