@@ -281,28 +281,35 @@ app.post('/assistant', async (req, res) => {
         }
 
         // 🔥 Step 1: Fetch transactions with properly formatted URL
-        const today = new Date().toISOString().split('T')[0];
-        const ninetyDaysAgo = new Date(Date.now() - (90 * 24 * 60 * 60 * 1000)).toISOString().split('T')[0];
+        const now = new Date();
+        // Add one day to ensure we include today's transactions
+        const tomorrow = new Date(now);
+        tomorrow.setDate(tomorrow.getDate() + 1);
+        const today = tomorrow.toISOString().split('T')[0];
+        
+        // Go back 90 days from tomorrow to ensure full coverage
+        const ninetyDaysAgo = new Date(tomorrow);
+        ninetyDaysAgo.setDate(ninetyDaysAgo.getDate() - 90);
+        const startDate = ninetyDaysAgo.toISOString().split('T')[0];
         
         // Log the date calculations
         console.log("📅 Date calculations:", {
-            today: {
-                iso: today,
-                full: new Date().toISOString(),
-                local: new Date().toLocaleString()
+            now: {
+                iso: now.toISOString(),
+                local: now.toLocaleString(),
+                date: now.toLocaleDateString()
             },
-            ninetyDaysAgo: {
-                iso: ninetyDaysAgo,
-                full: new Date(Date.now() - (90 * 24 * 60 * 60 * 1000)).toISOString(),
-                local: new Date(Date.now() - (90 * 24 * 60 * 60 * 1000)).toLocaleString()
+            queryRange: {
+                start: startDate,
+                end: today,
+                explanation: "Using tomorrow as end date to ensure we get all of today's transactions"
             }
         });
         
-        // Use supported constraint types and add a small buffer to dates
+        // Use supported constraint types with adjusted dates
         const constraints = JSON.stringify([
             {"key": "Created By", "constraint_type": "equals", "value": userId},
-            {"key": "is_pending?", "constraint_type": "equals", "value": "false"},
-            {"key": "Date", "constraint_type": "greater than", "value": ninetyDaysAgo},
+            {"key": "Date", "constraint_type": "greater than", "value": startDate},
             {"key": "Date", "constraint_type": "less than", "value": today}
         ]);
         
@@ -327,7 +334,8 @@ app.post('/assistant', async (req, res) => {
             console.log("📊 All transaction dates with details:");
             transactions.forEach((t, index) => {
                 const transactionDate = new Date(t.Date);
-                console.log(`${index + 1}. Date: ${t.Date} (${transactionDate.toLocaleString()}), Amount: ${t.Amount}, Bank: ${t.Bank}, Description: ${t.Description}, Month: ${t.Month}, Year: ${t.Year}`);
+                const isMarch = transactionDate.getMonth() === 2; // March is month 2 (0-based)
+                console.log(`${index + 1}. Date: ${t.Date} (${transactionDate.toLocaleString()}), Amount: ${t.Amount}, Bank: ${t.Bank}, Description: ${t.Description}, Month: ${t.Month}, Year: ${t.Year}, is_pending: ${t['is_pending?']}, isMarch: ${isMarch}`);
             });
 
             // Log transactions by month and year
@@ -353,17 +361,17 @@ app.post('/assistant', async (req, res) => {
                 return new Date(b.Date) - new Date(a.Date);
             });
 
-            // Take only the most recent 30 transactions for GPT-4
-            const recentTransactions = sortedTransactions.slice(0, 30);
+            // Take more transactions for GPT-4 (increased from 30 to 50)
+            const recentTransactions = sortedTransactions.slice(0, 50);
 
             // Format transactions with minimal fields for GPT-4
             const formattedTransactions = recentTransactions.map(t => ({
-                // Only include the most essential fields
                 date: t.Date ? new Date(t.Date).toLocaleString() : '',
                 amount: parseFloat(t.Amount).toFixed(2),
                 bank: t.Bank || '',
                 description: t.Description || 'No description',
-                category: t['Category (Old)'] || t.Category || 'Uncategorized'
+                category: t['Category (Old)'] || t.Category || 'Uncategorized',
+                is_pending: t['is_pending?'] || 'false'
             }));
 
             // Add debug information to the response
