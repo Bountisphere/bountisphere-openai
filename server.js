@@ -48,8 +48,7 @@ app.get('/', (req, res) => {
   res.send('🚀 Bountisphere OpenAI API is running!');
 });
 
-// 🔹 Fetch Transactions (Basic endpoint)
-// Now limited to the last 12 months of transactions
+// 🔹 Fetch Transactions Endpoint (Last 12 Months)
 app.post('/transactions', async (req, res) => {
   try {
     const { userId, endDate: userEndDate } = req.body;
@@ -104,8 +103,7 @@ app.post('/transactions', async (req, res) => {
   }
 });
 
-// 🔹 Analyze All Past Transactions with OpenAI using Function Calling
-// Now analyzes transactions from the last 12 months
+// 🔹 Analyze Transactions Endpoint (Last 12 Months)
 app.post('/analyze-transactions', async (req, res) => {
   try {
     const { userId, endDate: userEndDate } = req.body;
@@ -120,7 +118,7 @@ app.post('/analyze-transactions', async (req, res) => {
     ];
     const bubbleURL = `${process.env.BUBBLE_API_URL}/transactions?constraints=${encodeURIComponent(JSON.stringify(constraints))}&sort_field=Date&sort_direction=descending&limit=100`;
 
-    console.log("🌍 Fetching past transactions from:", bubbleURL);
+    console.log("🌍 Fetching transactions for analysis from:", bubbleURL);
     const transactionResponse = await axios.get(bubbleURL, {
       headers: { 'Authorization': `Bearer ${process.env.BUBBLE_API_KEY}` }
     });
@@ -161,8 +159,7 @@ app.post('/analyze-transactions', async (req, res) => {
   }
 });
 
-// 🔹 Handle General Questions About Data
-// Now only uses the last 12 months of transaction data
+// 🔹 Ask Question Endpoint (Last 12 Months)
 app.post('/ask-question', async (req, res) => {
   try {
     const { userId, question, endDate: userEndDate } = req.body;
@@ -177,7 +174,7 @@ app.post('/ask-question', async (req, res) => {
     ];
     const bubbleURL = `${process.env.BUBBLE_API_URL}/transactions?constraints=${encodeURIComponent(JSON.stringify(constraints))}&sort_field=Date&sort_direction=descending&limit=100`;
 
-    console.log("🌍 Fetching data from Bubble for question:", question);
+    console.log("🌍 Fetching transaction data from Bubble for question:", question);
     const dataResponse = await axios.get(bubbleURL, {
       headers: { 'Authorization': `Bearer ${process.env.BUBBLE_API_KEY}` }
     });
@@ -204,13 +201,12 @@ app.post('/ask-question', async (req, res) => {
   }
 });
 
-// 🔹 OpenAI Assistant Endpoint
-// This endpoint now uses the last 12 months of transactions for analysis
+// 🔹 OpenAI Assistant Endpoint (Reduced Data Version)
 app.post('/assistant', async (req, res) => {
   try {
     const { input, endDate: userEndDate } = req.body;
     const userId = req.query.userId?.trim();
-    console.log("📥 Received request with userId:", userId);
+    console.log("📥 Received /assistant request with userId:", userId);
     if (!userId || !input) {
       return res.status(400).json({ error: 'User ID and input are required' });
     }
@@ -222,29 +218,28 @@ app.post('/assistant', async (req, res) => {
       { "key": "Date", "constraint_type": "less than or equal", "value": formattedEndDate }
     ];
     const bubbleURL = `${process.env.BUBBLE_API_URL}/transactions?constraints=${encodeURIComponent(JSON.stringify(constraints))}&sort_field=Date&sort_direction=descending&limit=100`;
-    console.log("🌍 Attempting to fetch from URL:", bubbleURL);
+    console.log("🌍 Fetching transactions from:", bubbleURL);
     const transactionResponse = await axios.get(bubbleURL, {
       headers: { 'Authorization': `Bearer ${process.env.BUBBLE_API_KEY}` }
     });
     const transactions = transactionResponse.data?.response?.results || [];
     console.log(`✅ Retrieved ${transactions.length} transactions`);
+
+    // Simplify transaction data to essential fields only
     const formattedTransactions = transactions.map(t => ({
       date: t.Date ? new Date(t.Date).toLocaleString() : '',
       amount: parseFloat(t.Amount).toFixed(2),
       bank: t.Bank || '',
       description: t.Description || 'No description',
       category: t['Category (Old)'] || t.Category || 'Uncategorized',
-      category_description: t['Category Description'] || '',
-      transaction_type: t['Transaction Type'] || '',
-      is_pending: t['is_pending?'] === 'yes',
-      manually_added: t['Manually Added'] === 'yes',
-      personal_finance_category: t['Personal Finance Category'] || '',
-      transaction_frequency: t['Transaction Frequency'] || ''
+      transaction_type: t['Transaction Type'] || ''
     }));
-    // Limit the number of transactions to avoid payload issues
-    const maxTransactions = 50;
+    
+    // Limit the payload to the top 20 transactions
+    const maxTransactions = 20;
     const limitedTransactions = formattedTransactions.slice(0, maxTransactions);
     const transactionsString = JSON.stringify(limitedTransactions);
+
     const debugInfo = {
       totalTransactions: transactions.length,
       usedTransactions: limitedTransactions.length,
@@ -260,12 +255,13 @@ app.post('/assistant', async (req, res) => {
         userId
       }
     };
+
     const openAIResponse = await client.chat.completions.create({
       model: "gpt-4",
       messages: [
         {
           role: "system",
-          content: "You are the Bountisphere Money Coach—a friendly, supportive, and expert financial assistant. When analyzing transactions, focus on the most recent and relevant transactions, include bank names and transaction types, use categories and descriptions for context, format amounts with currency codes, and note if transactions are pending or manually added."
+          content: "You are the Bountisphere Money Coach—a friendly, supportive, and expert financial assistant. When analyzing transactions, focus on the most recent and relevant transactions, include bank names and transaction types, use categories and descriptions for context, and format amounts with currency codes."
         },
         {
           role: "user",
@@ -274,6 +270,7 @@ app.post('/assistant', async (req, res) => {
       ],
       temperature: 0.7
     });
+    
     res.json({
       success: true,
       answer: openAIResponse.choices[0].message.content,
@@ -282,7 +279,11 @@ app.post('/assistant', async (req, res) => {
     });
   } catch (error) {
     console.error("❌ Error in /assistant endpoint:", error.response?.data || error.message);
-    res.status(500).json({ error: 'Internal server error', details: error.message, stack: error.stack });
+    res.status(500).json({ 
+      error: 'Internal server error', 
+      details: error.message,
+      stack: error.stack
+    });
   }
 });
 
