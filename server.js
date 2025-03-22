@@ -462,15 +462,31 @@ app.get('/api/test-transactions', async (req, res) => {
         const endDate = new Date().toISOString().split('T')[0];
         const startDate = new Date(Date.now() - (90 * 24 * 60 * 60 * 1000)).toISOString().split('T')[0];
 
+        // Log the date calculations
+        console.log("📅 Test endpoint date calculations:", {
+            today: {
+                iso: endDate,
+                full: new Date().toISOString(),
+                local: new Date().toLocaleString()
+            },
+            ninetyDaysAgo: {
+                iso: startDate,
+                full: new Date(Date.now() - (90 * 24 * 60 * 60 * 1000)).toISOString(),
+                local: new Date(Date.now() - (90 * 24 * 60 * 60 * 1000)).toLocaleString()
+            }
+        });
+
+        // Try without the is_pending constraint
         const constraints = [
             {"key": "Created By", "constraint_type": "equals", "value": userId},
-            {"key": "Date", "constraint_type": "greater than or equal", "value": startDate},
-            {"key": "Date", "constraint_type": "less than or equal", "value": endDate}
+            {"key": "Date", "constraint_type": "greater than", "value": startDate},
+            {"key": "Date", "constraint_type": "less than", "value": endDate}
         ];
 
         const bubbleURL = `${process.env.BUBBLE_API_URL}/transactions?constraints=${encodeURIComponent(JSON.stringify(constraints))}&sort_field=Date&sort_direction=descending`;
         
         console.log('🔍 Test endpoint URL:', bubbleURL);
+        console.log('📅 Test endpoint constraints:', JSON.stringify(constraints, null, 2));
         
         const response = await axios.get(bubbleURL, {
             headers: {
@@ -479,6 +495,31 @@ app.get('/api/test-transactions', async (req, res) => {
         });
 
         const transactions = response.data?.response?.results || [];
+        
+        // Log all transaction dates with details
+        console.log("\n📊 All transaction dates with details:");
+        transactions.forEach((t, index) => {
+            const transactionDate = new Date(t.Date);
+            console.log(`${index + 1}. Date: ${t.Date} (${transactionDate.toLocaleString()}), Amount: ${t.Amount}, Bank: ${t.Bank}, Description: ${t.Description}, Month: ${t.Month}, Year: ${t.Year}, is_pending: ${t['is_pending?']}`);
+        });
+
+        // Log transactions by month and year
+        const transactionsByMonthYear = transactions.reduce((acc, t) => {
+            const monthYear = `${t.Month} ${t.Year}`;
+            if (!acc[monthYear]) {
+                acc[monthYear] = [];
+            }
+            acc[monthYear].push(t);
+            return acc;
+        }, {});
+
+        console.log("\n📅 Transactions by month and year:");
+        Object.entries(transactionsByMonthYear).forEach(([monthYear, txs]) => {
+            console.log(`${monthYear}: ${txs.length} transactions`);
+            txs.slice(0, 3).forEach(t => {
+                console.log(`  - ${t.Date}: ${t.Amount} - ${t.Description}`);
+            });
+        });
         
         const debugInfo = {
             requestInfo: {
@@ -500,6 +541,7 @@ app.get('/api/test-transactions', async (req, res) => {
                     modifiedDate: transactions[0].Modified_Date,
                     createdBy: transactions[0]['Created By']
                 } : null,
+                transactionsByMonthYear,
                 rawResponse: response.data
             }
         };
