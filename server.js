@@ -333,104 +333,69 @@ app.post('/assistant', async (req, res) => {
         });
 
         try {
-            const transactionResponse = await axios.get(bubbleURL, {
-                headers: { 'Authorization': `Bearer ${process.env.BUBBLE_API_KEY}` }
-            });
+            // Initialize arrays to store all transactions
+            let allTransactions = [];
+            let cursor = 0;
+            let hasMore = true;
 
-            const transactions = transactionResponse.data?.response?.results || [];
-            console.log(`✅ Retrieved ${transactions.length} transactions`);
-            
-            // Enhanced debugging: Transaction date distribution
-            const dateDistribution = transactions.reduce((acc, t) => {
-                const date = new Date(t.Date);
-                const monthYear = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
-                if (!acc[monthYear]) {
-                    acc[monthYear] = {
-                        count: 0,
-                        examples: [],
-                        totalAmount: 0
-                    };
-                }
-                acc[monthYear].count++;
-                acc[monthYear].totalAmount += parseFloat(t.Amount) || 0;
-                if (acc[monthYear].examples.length < 3) {
-                    acc[monthYear].examples.push({
-                        date: t.Date,
-                        description: t.Description,
-                        amount: t.Amount,
-                        bank: t.Bank
-                    });
-                }
-                return acc;
-            }, {});
+            // Fetch all pages of transactions
+            while (hasMore) {
+                const pageURL = `${bubbleURL}&cursor=${cursor}`;
+                console.log(`🔄 Fetching page with cursor: ${cursor}`);
 
-            console.log("\n📊 Transaction Distribution by Month:");
-            Object.entries(dateDistribution)
-                .sort((a, b) => b[0].localeCompare(a[0])) // Sort by date descending
-                .forEach(([monthYear, data]) => {
-                    console.log(`\n${monthYear}:`);
-                    console.log(`  Total Transactions: ${data.count}`);
-                    console.log(`  Total Amount: $${data.totalAmount.toFixed(2)}`);
-                    console.log('  Example Transactions:');
-                    data.examples.forEach(ex => 
-                        console.log(`    - ${ex.date}: $${ex.amount} - ${ex.description} (${ex.bank})`)
-                    );
+                const transactionResponse = await axios.get(pageURL, {
+                    headers: { 'Authorization': `Bearer ${process.env.BUBBLE_API_KEY}` }
                 });
 
-            // Debug: Date range analysis
-            const dates = transactions.map(t => new Date(t.Date));
-            const earliestDate = new Date(Math.min(...dates));
-            const latestDate = new Date(Math.max(...dates));
-            
-            console.log("\n📅 Date Range Analysis:");
-            console.log({
-                requestedRange: {
-                    start: startDate,
-                    end: endDate,
-                    daysRequested: (new Date(endDate) - new Date(startDate)) / (1000 * 60 * 60 * 24)
-                },
-                actualRange: {
-                    earliest: earliestDate.toISOString(),
-                    latest: latestDate.toISOString(),
-                    daysSpanned: (latestDate - earliestDate) / (1000 * 60 * 60 * 24)
-                },
-                currentTime: {
-                    server: new Date().toISOString(),
-                    serverTimezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-                    utcOffset: new Date().getTimezoneOffset()
-                }
-            });
-
-            // Enhanced transaction validation
-            const validationResults = transactions.reduce((acc, t) => {
-                // Check for potential date issues
-                const transactionDate = new Date(t.Date);
-                const isDateValid = !isNaN(transactionDate);
-                const isFutureDate = isDateValid && transactionDate > now;
-                const isWithinRange = isDateValid && 
-                    transactionDate >= new Date(startDate) && 
-                    transactionDate <= new Date(endDate);
-
-                // Track validation results
-                if (!isDateValid) acc.invalidDates.push(t.Date);
-                if (isFutureDate) acc.futureDates.push(t.Date);
-                if (!isWithinRange && isDateValid) acc.outOfRangeDates.push(t.Date);
+                const pageTransactions = transactionResponse.data?.response?.results || [];
+                allTransactions = [...allTransactions, ...pageTransactions];
                 
-                return acc;
-            }, { invalidDates: [], futureDates: [], outOfRangeDates: [] });
+                // Check if there are more pages
+                const remaining = transactionResponse.data?.response?.remaining || 0;
+                cursor = transactionResponse.data?.response?.cursor || 0;
+                hasMore = remaining > 0;
 
-            console.log("\n🔍 Transaction Validation Results:", 
-                Object.entries(validationResults)
-                    .filter(([_, arr]) => arr.length > 0)
-                    .reduce((acc, [key, value]) => ({ ...acc, [key]: value }), {})
-            );
+                console.log(`📊 Page stats:`, {
+                    newTransactions: pageTransactions.length,
+                    totalSoFar: allTransactions.length,
+                    remaining,
+                    cursor
+                });
+            }
 
-            // Sort transactions by date to ensure we get the most recent ones
-            const sortedTransactions = [...transactions].sort((a, b) => {
+            console.log(`✅ Retrieved ${allTransactions.length} total transactions`);
+            
+            // Sort transactions by date (newest first)
+            const sortedTransactions = allTransactions.sort((a, b) => {
                 return new Date(b.Date) - new Date(a.Date);
             });
 
-            // Take more transactions for GPT-4 (increased from 30 to 50)
+            // Group transactions by month for analysis
+            const monthGroups = sortedTransactions.reduce((acc, t) => {
+                const date = new Date(t.Date);
+                const monthKey = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+                if (!acc[monthKey]) {
+                    acc[monthKey] = [];
+                }
+                acc[monthKey].push(t);
+                return acc;
+            }, {});
+
+            // Log detailed month analysis
+            console.log("\n📅 Transaction Analysis by Month:");
+            Object.entries(monthGroups)
+                .sort((a, b) => b[0].localeCompare(a[0]))
+                .forEach(([month, transactions]) => {
+                    console.log(`\n${month}:`);
+                    console.log(`  Count: ${transactions.length}`);
+                    console.log(`  Date Range: ${new Date(transactions[0].Date).toISOString()} to ${new Date(transactions[transactions.length-1].Date).toISOString()}`);
+                    console.log(`  Sample Transactions:`);
+                    transactions.slice(0, 3).forEach(t => {
+                        console.log(`    - ${t.Date}: ${t.Amount} (${t.Description})`);
+                    });
+                });
+
+            // Take the 50 most recent transactions for GPT-4
             const recentTransactions = sortedTransactions.slice(0, 50);
 
             // Format transactions with minimal fields for GPT-4
