@@ -27,66 +27,64 @@ const client = new OpenAI({
 // Middleware to parse JSON requests
 app.use(express.json());
 
+/**
+ * Helper function to calculate a 12-month date range.
+ * If an end date is provided (as a string in ISO format), it uses that.
+ * Otherwise, it uses the current date as the end date.
+ * The start date is calculated as 12 months before the end date.
+ */
+function getDateRange(providedEndDate) {
+  const currentDate = providedEndDate ? new Date(providedEndDate) : new Date();
+  const endDate = new Date(currentDate);
+  const startDate = new Date(currentDate);
+  startDate.setFullYear(startDate.getFullYear() - 1);
+  const formattedEndDate = endDate.toISOString().split('T')[0];
+  const formattedStartDate = startDate.toISOString().split('T')[0];
+  return { formattedStartDate, formattedEndDate };
+}
+
 // 🔹 Health Check Route
 app.get('/', (req, res) => {
   res.send('🚀 Bountisphere OpenAI API is running!');
 });
 
 // 🔹 Fetch Transactions (Basic endpoint)
+// Now limited to the last 12 months of transactions
 app.post('/transactions', async (req, res) => {
   try {
-    const { userId } = req.body;
+    const { userId, endDate: userEndDate } = req.body;
     if (!userId) {
       return res.status(400).json({ error: 'User ID is required' });
     }
-
-    // Build constraints array - start with just the user ID and pending status
+    const { formattedStartDate, formattedEndDate } = getDateRange(userEndDate);
     const constraints = [
       { "key": "Created By", "constraint_type": "equals", "value": userId },
-      { "key": "is_pending?", "constraint_type": "equals", "value": "false" }
+      { "key": "is_pending?", "constraint_type": "equals", "value": "false" },
+      { "key": "Date", "constraint_type": "greater than or equal", "value": formattedStartDate },
+      { "key": "Date", "constraint_type": "less than or equal", "value": formattedEndDate }
     ];
-
-    // Add date constraints for the last 90 days
-    const today = new Date().toISOString().split('T')[0];
-    const ninetyDaysAgo = new Date(Date.now() - (90 * 24 * 60 * 60 * 1000))
-      .toISOString()
-      .split('T')[0];
-    constraints.push({ "key": "Date", "constraint_type": "greater than", "value": ninetyDaysAgo });
-    constraints.push({ "key": "Date", "constraint_type": "less than", "value": today });
-
     const bubbleURL = `${process.env.BUBBLE_API_URL}/transactions?constraints=${encodeURIComponent(JSON.stringify(constraints))}&sort_field=Date&sort_direction=descending&limit=100`;
 
     console.log("🌍 Fetching transactions from:", bubbleURL);
-    console.log("📅 Date range:", { ninetyDaysAgo, today });
+    console.log("📅 Date range:", { formattedStartDate, formattedEndDate });
     console.log("🔍 Constraints:", constraints);
 
     const response = await axios.get(bubbleURL, {
       headers: { 'Authorization': `Bearer ${process.env.BUBBLE_API_KEY}` }
     });
-
     const transactions = response.data?.response?.results || [];
-
-    // Build debug info
     const debugInfo = {
       totalTransactions: transactions.length,
       dateRange: transactions.length > 0 ? {
         earliest: transactions[transactions.length - 1].Date,
         latest: transactions[0].Date,
         currentServerTime: new Date().toISOString(),
-        requestedDateRange: {
-          startDate: ninetyDaysAgo,
-          endDate: today
-        }
+        requestedDateRange: { startDate: formattedStartDate, endDate: formattedEndDate }
       } : null,
       query: {
         url: bubbleURL,
         constraints,
-        userId,
-        rawResponse: response.data,
-        pagination: {
-          cursor: response.data?.response?.cursor,
-          remaining: response.data?.response?.remaining
-        }
+        userId
       }
     };
 
@@ -102,45 +100,39 @@ app.post('/transactions', async (req, res) => {
     });
   } catch (error) {
     console.error("❌ Error fetching transactions:", error.response?.data || error.message);
-    res.status(500).json({
-      error: 'Internal server error',
-      details: error.message
-    });
+    res.status(500).json({ error: 'Internal server error', details: error.message });
   }
 });
 
 // 🔹 Analyze All Past Transactions with OpenAI using Function Calling
+// Now analyzes transactions from the last 12 months
 app.post('/analyze-transactions', async (req, res) => {
   try {
-    const { userId } = req.body;
+    const { userId, endDate: userEndDate } = req.body;
     if (!userId) {
       return res.status(400).json({ error: 'User ID is required' });
     }
-    const today = new Date().toISOString().split("T")[0];
-
-    // Fetch past transactions (up to today)
-    const bubbleURL = `${process.env.BUBBLE_API_URL}/transactions?constraints=${encodeURIComponent(JSON.stringify([
+    const { formattedStartDate, formattedEndDate } = getDateRange(userEndDate);
+    const constraints = [
       { "key": "Created By", "constraint_type": "equals", "value": userId },
-      { "key": "Date", "constraint_type": "less than", "value": today }
-    ]))}&sort_field=Date&sort_direction=descending&limit=100`;
+      { "key": "Date", "constraint_type": "greater than or equal", "value": formattedStartDate },
+      { "key": "Date", "constraint_type": "less than or equal", "value": formattedEndDate }
+    ];
+    const bubbleURL = `${process.env.BUBBLE_API_URL}/transactions?constraints=${encodeURIComponent(JSON.stringify(constraints))}&sort_field=Date&sort_direction=descending&limit=100`;
 
     console.log("🌍 Fetching past transactions from:", bubbleURL);
-
     const transactionResponse = await axios.get(bubbleURL, {
       headers: { 'Authorization': `Bearer ${process.env.BUBBLE_API_KEY}` }
     });
-
     const transactions = transactionResponse.data?.response?.results || [];
     if (transactions.length === 0) {
-      return res.json({ message: "No past transactions found for analysis." });
+      return res.json({ message: "No transactions found for analysis in the last 12 months." });
     }
-
-    // Send past transactions to OpenAI for analysis
     const openAIResponse = await client.chat.completions.create({
       model: process.env.OPENAI_MODEL || 'gpt-4',
       messages: [
         { role: "system", content: "You are a financial assistant providing insights on spending habits, recurring charges, and budgeting strategies." },
-        { role: "user", content: `Analyze the user's past transactions up to ${today}. Identify spending trends, recurring expenses, and budgeting opportunities based on these transactions:` },
+        { role: "user", content: `Analyze the user's transactions from ${formattedStartDate} to ${formattedEndDate}. Identify spending trends, recurring expenses, and budgeting opportunities:` },
         { role: "user", content: JSON.stringify(transactions) }
       ],
       functions: [
@@ -161,7 +153,6 @@ app.post('/analyze-transactions', async (req, res) => {
       function_call: "auto",
       temperature: 0.7
     });
-
     console.log("✅ OpenAI Response Received");
     res.json(openAIResponse);
   } catch (error) {
@@ -171,37 +162,37 @@ app.post('/analyze-transactions', async (req, res) => {
 });
 
 // 🔹 Handle General Questions About Data
+// Now only uses the last 12 months of transaction data
 app.post('/ask-question', async (req, res) => {
   try {
-    const { userId, question } = req.body;
+    const { userId, question, endDate: userEndDate } = req.body;
     if (!userId || !question) {
       return res.status(400).json({ error: 'User ID and question are required' });
     }
-
-    const bubbleURL = `${process.env.BUBBLE_API_URL}/transactions?constraints=${encodeURIComponent(JSON.stringify([
-      { "key": "Created By", "constraint_type": "equals", "value": userId }
-    ]))}&sort_field=Date&sort_direction=descending&limit=100`;
+    const { formattedStartDate, formattedEndDate } = getDateRange(userEndDate);
+    const constraints = [
+      { "key": "Created By", "constraint_type": "equals", "value": userId },
+      { "key": "Date", "constraint_type": "greater than or equal", "value": formattedStartDate },
+      { "key": "Date", "constraint_type": "less than or equal", "value": formattedEndDate }
+    ];
+    const bubbleURL = `${process.env.BUBBLE_API_URL}/transactions?constraints=${encodeURIComponent(JSON.stringify(constraints))}&sort_field=Date&sort_direction=descending&limit=100`;
 
     console.log("🌍 Fetching data from Bubble for question:", question);
-
     const dataResponse = await axios.get(bubbleURL, {
       headers: { 'Authorization': `Bearer ${process.env.BUBBLE_API_KEY}` }
     });
-
     const data = dataResponse.data?.response?.results || [];
     if (data.length === 0) {
-      return res.json({ message: "No data found to answer your question." });
+      return res.json({ message: "No data found in the last 12 months to answer your question." });
     }
-
     const openAIResponse = await client.chat.completions.create({
       model: process.env.OPENAI_MODEL || 'gpt-4',
       messages: [
         { role: "system", content: "You are a helpful assistant that analyzes financial data and answers questions about transactions, spending patterns, and financial insights." },
-        { role: "user", content: `Here is the user's data and question. Please analyze the data and answer the question: "${question}"\n\nData: ${JSON.stringify(data)}` }
+        { role: "user", content: `Here is the user's transaction data from ${formattedStartDate} to ${formattedEndDate} and question: "${question}"\n\nData: ${JSON.stringify(data)}` }
       ],
       temperature: 0.7
     });
-
     console.log("✅ OpenAI Response Received");
     res.json({
       answer: openAIResponse.choices[0].message.content,
@@ -214,39 +205,29 @@ app.post('/ask-question', async (req, res) => {
 });
 
 // 🔹 OpenAI Assistant Endpoint
+// This endpoint now uses the last 12 months of transactions for analysis
 app.post('/assistant', async (req, res) => {
   try {
-    const { input } = req.body;
+    const { input, endDate: userEndDate } = req.body;
     const userId = req.query.userId?.trim();
-
     console.log("📥 Received request with userId:", userId);
-
     if (!userId || !input) {
       return res.status(400).json({ error: 'User ID and input are required' });
     }
-
-    // Build date constraints for the last 90 days
-    const today = new Date().toISOString().split('T')[0];
-    const ninetyDaysAgo = new Date(Date.now() - (90 * 24 * 60 * 60 * 1000))
-      .toISOString()
-      .split('T')[0];
+    const { formattedStartDate, formattedEndDate } = getDateRange(userEndDate);
     const constraints = [
       { "key": "Created By", "constraint_type": "equals", "value": userId },
       { "key": "is_pending?", "constraint_type": "equals", "value": "false" },
-      { "key": "Date", "constraint_type": "greater than", "value": ninetyDaysAgo },
-      { "key": "Date", "constraint_type": "less than", "value": today }
+      { "key": "Date", "constraint_type": "greater than or equal", "value": formattedStartDate },
+      { "key": "Date", "constraint_type": "less than or equal", "value": formattedEndDate }
     ];
     const bubbleURL = `${process.env.BUBBLE_API_URL}/transactions?constraints=${encodeURIComponent(JSON.stringify(constraints))}&sort_field=Date&sort_direction=descending&limit=100`;
-
     console.log("🌍 Attempting to fetch from URL:", bubbleURL);
-
     const transactionResponse = await axios.get(bubbleURL, {
       headers: { 'Authorization': `Bearer ${process.env.BUBBLE_API_KEY}` }
     });
     const transactions = transactionResponse.data?.response?.results || [];
     console.log(`✅ Retrieved ${transactions.length} transactions`);
-
-    // Format transactions for analysis
     const formattedTransactions = transactions.map(t => ({
       date: t.Date ? new Date(t.Date).toLocaleString() : '',
       amount: parseFloat(t.Amount).toFixed(2),
@@ -260,13 +241,10 @@ app.post('/assistant', async (req, res) => {
       personal_finance_category: t['Personal Finance Category'] || '',
       transaction_frequency: t['Transaction Frequency'] || ''
     }));
-
-    // Limit the number of transactions and use compact JSON to reduce tokens
+    // Limit the number of transactions to avoid payload issues
     const maxTransactions = 50;
     const limitedTransactions = formattedTransactions.slice(0, maxTransactions);
     const transactionsString = JSON.stringify(limitedTransactions);
-
-    // Debug info
     const debugInfo = {
       totalTransactions: transactions.length,
       usedTransactions: limitedTransactions.length,
@@ -274,10 +252,7 @@ app.post('/assistant', async (req, res) => {
         earliest: transactions[transactions.length - 1].Date,
         latest: transactions[0].Date,
         currentServerTime: new Date().toISOString(),
-        requestedDateRange: {
-          startDate: ninetyDaysAgo,
-          endDate: today
-        }
+        requestedDateRange: { startDate: formattedStartDate, endDate: formattedEndDate }
       } : null,
       query: {
         url: bubbleURL,
@@ -285,7 +260,6 @@ app.post('/assistant', async (req, res) => {
         userId
       }
     };
-
     const openAIResponse = await client.chat.completions.create({
       model: "gpt-4",
       messages: [
@@ -295,12 +269,11 @@ app.post('/assistant', async (req, res) => {
         },
         {
           role: "user",
-          content: `Please analyze these transactions and answer the following question: ${input}\n\nTransactions: ${transactionsString}`
+          content: `Please analyze these transactions from ${formattedStartDate} to ${formattedEndDate} and answer the following question: ${input}\n\nTransactions: ${transactionsString}`
         }
       ],
       temperature: 0.7
     });
-
     res.json({
       success: true,
       answer: openAIResponse.choices[0].message.content,
@@ -309,11 +282,7 @@ app.post('/assistant', async (req, res) => {
     });
   } catch (error) {
     console.error("❌ Error in /assistant endpoint:", error.response?.data || error.message);
-    res.status(500).json({
-      error: 'Internal server error',
-      details: error.message,
-      stack: error.stack
-    });
+    res.status(500).json({ error: 'Internal server error', details: error.message, stack: error.stack });
   }
 });
 
@@ -324,33 +293,22 @@ app.get('/api/test-transactions', async (req, res) => {
     if (!userId) {
       return res.status(400).json({ error: 'userId is required' });
     }
-
-    const endDate = new Date().toISOString().split('T')[0];
-    const startDate = new Date(Date.now() - (90 * 24 * 60 * 60 * 1000))
-      .toISOString()
-      .split('T')[0];
-
+    const { formattedStartDate, formattedEndDate } = getDateRange();
     const constraints = [
       { "key": "Created By", "constraint_type": "equals", "value": userId },
-      { "key": "Date", "constraint_type": "greater than or equal", "value": startDate },
-      { "key": "Date", "constraint_type": "less than or equal", "value": endDate }
+      { "key": "Date", "constraint_type": "greater than or equal", "value": formattedStartDate },
+      { "key": "Date", "constraint_type": "less than or equal", "value": formattedEndDate }
     ];
-
     const bubbleURL = `${process.env.BUBBLE_API_URL}/transactions?constraints=${encodeURIComponent(JSON.stringify(constraints))}&sort_field=Date&sort_direction=descending`;
     console.log('🔍 Test endpoint URL:', bubbleURL);
-
     const response = await axios.get(bubbleURL, {
-      headers: {
-        'Authorization': `Bearer ${process.env.BUBBLE_API_KEY}`
-      }
+      headers: { 'Authorization': `Bearer ${process.env.BUBBLE_API_KEY}` }
     });
-
     const transactions = response.data?.response?.results || [];
     const debugInfo = {
       requestInfo: {
         userId,
-        startDate,
-        endDate,
+        dateRange: { startDate: formattedStartDate, endDate: formattedEndDate },
         currentTime: new Date().toISOString(),
         constraints: JSON.parse(decodeURIComponent(bubbleURL.split('constraints=')[1].split('&')[0]))
       },
@@ -362,22 +320,17 @@ app.get('/api/test-transactions', async (req, res) => {
         } : null,
         firstTransaction: transactions.length > 0 ? {
           date: transactions[0].Date,
-          createdDate: transactions[0].Created_Date,
-          modifiedDate: transactions[0].Modified_Date,
-          createdBy: transactions[0]['Created By']
+          createdDate: transactions[0]["Created Date"],
+          modifiedDate: transactions[0]["Modified Date"],
+          createdBy: transactions[0]["Created By"]
         } : null,
         rawResponse: response.data
       }
     };
-
     res.json(debugInfo);
   } catch (error) {
     console.error('❌ Error in test-transactions endpoint:', error);
-    res.status(500).json({
-      error: 'Failed to fetch transactions',
-      details: error.message,
-      response: error.response?.data
-    });
+    res.status(500).json({ error: 'Failed to fetch transactions', details: error.message, response: error.response?.data });
   }
 });
 
