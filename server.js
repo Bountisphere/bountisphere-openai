@@ -69,7 +69,7 @@ app.post('/transactions', async (req, res) => {
     console.log("🔍 Constraints:", constraints);
 
     const response = await axios.post(bubbleURL, {
-      constraints,
+      constraints: JSON.stringify(constraints),
       sort_field: 'Date',
       sort_direction: 'descending',
       limit: 100
@@ -125,7 +125,7 @@ app.post('/analyze-transactions', async (req, res) => {
 
     console.log("🌍 Posting transaction fetch request for analysis to:", bubbleURL);
     const transactionResponse = await axios.post(bubbleURL, {
-      constraints,
+      constraints: JSON.stringify(constraints),
       sort_field: 'Date',
       sort_direction: 'descending',
       limit: 100
@@ -186,7 +186,7 @@ app.post('/ask-question', async (req, res) => {
 
     console.log("🌍 Posting transaction data request for question to:", bubbleURL);
     const dataResponse = await axios.post(bubbleURL, {
-      constraints,
+      constraints: JSON.stringify(constraints),
       sort_field: 'Date',
       sort_direction: 'descending',
       limit: 100
@@ -235,7 +235,7 @@ app.post('/assistant', async (req, res) => {
     const bubbleURL = `${process.env.BUBBLE_API_URL}/transactions`;
     console.log("🌍 Posting transaction fetch request for /assistant to:", bubbleURL);
     const transactionResponse = await axios.post(bubbleURL, {
-      constraints,
+      constraints: JSON.stringify(constraints),
       sort_field: 'Date',
       sort_direction: 'descending',
       limit: 100
@@ -322,9 +322,10 @@ app.get('/api/test-transactions', async (req, res) => {
     const bubbleURL = `${process.env.BUBBLE_API_URL}/transactions`;
     console.log('🔍 Test endpoint posting request to:', bubbleURL);
     const response = await axios.post(bubbleURL, {
-      constraints,
+      constraints: JSON.stringify(constraints),
       sort_field: 'Date',
-      sort_direction: 'descending'
+      sort_direction: 'descending',
+      limit: 100
     }, {
       headers: { 'Authorization': `Bearer ${process.env.BUBBLE_API_KEY}` }
     });
