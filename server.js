@@ -282,43 +282,53 @@ app.post('/assistant', async (req, res) => {
 
         // 🔥 Step 1: Fetch transactions with properly formatted URL
         const now = new Date();
+        
+        // Format dates to match Bubble's ISO format
+        function formatDateForBubble(date) {
+            return date.toISOString().split('.')[0] + '.000Z';  // Format: YYYY-MM-DDTHH:mm:ss.000Z
+        }
+
         // Add one day to ensure we include today's transactions
         const tomorrow = new Date(now);
         tomorrow.setDate(tomorrow.getDate() + 1);
-        const today = tomorrow.toISOString().split('T')[0];
+        tomorrow.setHours(23, 59, 59, 999);  // End of day in local time
+        const endDate = formatDateForBubble(tomorrow);
         
         // Go back 90 days from tomorrow to ensure full coverage
         const ninetyDaysAgo = new Date(tomorrow);
         ninetyDaysAgo.setDate(ninetyDaysAgo.getDate() - 90);
-        const startDate = ninetyDaysAgo.toISOString().split('T')[0];
+        ninetyDaysAgo.setHours(0, 0, 0, 0);  // Start of day in local time
+        const startDate = formatDateForBubble(ninetyDaysAgo);
         
         // Log the date calculations
         console.log("📅 Date calculations:", {
             now: {
                 iso: now.toISOString(),
                 local: now.toLocaleString(),
-                date: now.toLocaleDateString()
+                date: now.toLocaleDateString(),
+                timestamp: now.getTime()
             },
             queryRange: {
                 start: startDate,
-                end: today,
-                explanation: "Using tomorrow as end date to ensure we get all of today's transactions"
+                end: endDate,
+                explanation: "Using Bubble's ISO format with milliseconds (YYYY-MM-DDTHH:mm:ss.000Z)"
             }
         });
         
-        // Use supported constraint types with adjusted dates
+        // Use supported constraint types with ISO dates
         const constraints = JSON.stringify([
             {"key": "Created By", "constraint_type": "equals", "value": userId},
-            {"key": "Date", "constraint_type": "greater than", "value": startDate},
-            {"key": "Date", "constraint_type": "less than", "value": today}
+            {"key": "Date", "constraint_type": "greater than or equal", "value": startDate},
+            {"key": "Date", "constraint_type": "less than or equal", "value": endDate}
         ]);
         
-        const bubbleURL = `${process.env.BUBBLE_API_URL}/transactions?constraints=${encodeURIComponent(constraints)}&sort_field=Date&sort_direction=descending&limit=100`;
+        // Increase limit to ensure we get all transactions
+        const bubbleURL = `${process.env.BUBBLE_API_URL}/transactions?constraints=${encodeURIComponent(constraints)}&sort_field=Date&sort_direction=descending&limit=200`;
 
         console.log("🌍 Attempting to fetch from URL:", bubbleURL);
         console.log("📅 Date range:", { 
-            startDate: ninetyDaysAgo,
-            endDate: today,
+            startDate,
+            endDate,
             currentServerTime: new Date().toISOString()
         });
 
