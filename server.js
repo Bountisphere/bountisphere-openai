@@ -62,15 +62,21 @@ app.post('/transactions', async (req, res) => {
       { "key": "Date", "constraint_type": "greater than or equal", "value": formattedStartDate },
       { "key": "Date", "constraint_type": "less than or equal", "value": formattedEndDate }
     ];
-    const bubbleURL = `${process.env.BUBBLE_API_URL}/transactions?constraints=${encodeURIComponent(JSON.stringify(constraints))}&sort_field=Date&sort_direction=descending&limit=100`;
+    const bubbleURL = `${process.env.BUBBLE_API_URL}/transactions`;
 
-    console.log("🌍 Fetching transactions from:", bubbleURL);
+    console.log("🌍 Posting transaction fetch request to:", bubbleURL);
     console.log("📅 Date range:", { formattedStartDate, formattedEndDate });
     console.log("🔍 Constraints:", constraints);
 
-    const response = await axios.get(bubbleURL, {
+    const response = await axios.post(bubbleURL, {
+      constraints,
+      sort_field: 'Date',
+      sort_direction: 'descending',
+      limit: 100
+    }, {
       headers: { 'Authorization': `Bearer ${process.env.BUBBLE_API_KEY}` }
     });
+
     const transactions = response.data?.response?.results || [];
     const debugInfo = {
       totalTransactions: transactions.length,
@@ -81,7 +87,6 @@ app.post('/transactions', async (req, res) => {
         requestedDateRange: { startDate: formattedStartDate, endDate: formattedEndDate }
       } : null,
       query: {
-        url: bubbleURL,
         constraints,
         userId
       }
@@ -116,10 +121,15 @@ app.post('/analyze-transactions', async (req, res) => {
       { "key": "Date", "constraint_type": "greater than or equal", "value": formattedStartDate },
       { "key": "Date", "constraint_type": "less than or equal", "value": formattedEndDate }
     ];
-    const bubbleURL = `${process.env.BUBBLE_API_URL}/transactions?constraints=${encodeURIComponent(JSON.stringify(constraints))}&sort_field=Date&sort_direction=descending&limit=100`;
+    const bubbleURL = `${process.env.BUBBLE_API_URL}/transactions`;
 
-    console.log("🌍 Fetching transactions for analysis from:", bubbleURL);
-    const transactionResponse = await axios.get(bubbleURL, {
+    console.log("🌍 Posting transaction fetch request for analysis to:", bubbleURL);
+    const transactionResponse = await axios.post(bubbleURL, {
+      constraints,
+      sort_field: 'Date',
+      sort_direction: 'descending',
+      limit: 100
+    }, {
       headers: { 'Authorization': `Bearer ${process.env.BUBBLE_API_KEY}` }
     });
     const transactions = transactionResponse.data?.response?.results || [];
@@ -151,7 +161,7 @@ app.post('/analyze-transactions', async (req, res) => {
       function_call: "auto",
       temperature: 0.7
     });
-    console.log("✅ OpenAI Response Received");
+    console.log("✅ OpenAI Response Received for analysis");
     res.json(openAIResponse);
   } catch (error) {
     console.error("❌ Error processing /analyze-transactions:", error.response?.data || error.message);
@@ -172,10 +182,15 @@ app.post('/ask-question', async (req, res) => {
       { "key": "Date", "constraint_type": "greater than or equal", "value": formattedStartDate },
       { "key": "Date", "constraint_type": "less than or equal", "value": formattedEndDate }
     ];
-    const bubbleURL = `${process.env.BUBBLE_API_URL}/transactions?constraints=${encodeURIComponent(JSON.stringify(constraints))}&sort_field=Date&sort_direction=descending&limit=100`;
+    const bubbleURL = `${process.env.BUBBLE_API_URL}/transactions`;
 
-    console.log("🌍 Fetching transaction data from Bubble for question:", question);
-    const dataResponse = await axios.get(bubbleURL, {
+    console.log("🌍 Posting transaction data request for question to:", bubbleURL);
+    const dataResponse = await axios.post(bubbleURL, {
+      constraints,
+      sort_field: 'Date',
+      sort_direction: 'descending',
+      limit: 100
+    }, {
       headers: { 'Authorization': `Bearer ${process.env.BUBBLE_API_KEY}` }
     });
     const data = dataResponse.data?.response?.results || [];
@@ -190,13 +205,13 @@ app.post('/ask-question', async (req, res) => {
       ],
       temperature: 0.7
     });
-    console.log("✅ OpenAI Response Received");
+    console.log("✅ OpenAI Response Received for question");
     res.json({
       answer: openAIResponse.choices[0].message.content,
       data_used: data.length
     });
   } catch (error) {
-    console.error("❌ Error processing question:", error.response?.data || error.message);
+    console.error("❌ Error processing /ask-question:", error.response?.data || error.message);
     res.status(500).json({ error: 'Internal server error' });
   }
 });
@@ -217,13 +232,18 @@ app.post('/assistant', async (req, res) => {
       { "key": "Date", "constraint_type": "greater than or equal", "value": formattedStartDate },
       { "key": "Date", "constraint_type": "less than or equal", "value": formattedEndDate }
     ];
-    const bubbleURL = `${process.env.BUBBLE_API_URL}/transactions?constraints=${encodeURIComponent(JSON.stringify(constraints))}&sort_field=Date&sort_direction=descending&limit=100`;
-    console.log("🌍 Fetching transactions from:", bubbleURL);
-    const transactionResponse = await axios.get(bubbleURL, {
+    const bubbleURL = `${process.env.BUBBLE_API_URL}/transactions`;
+    console.log("🌍 Posting transaction fetch request for /assistant to:", bubbleURL);
+    const transactionResponse = await axios.post(bubbleURL, {
+      constraints,
+      sort_field: 'Date',
+      sort_direction: 'descending',
+      limit: 100
+    }, {
       headers: { 'Authorization': `Bearer ${process.env.BUBBLE_API_KEY}` }
     });
     const transactions = transactionResponse.data?.response?.results || [];
-    console.log(`✅ Retrieved ${transactions.length} transactions`);
+    console.log(`✅ Retrieved ${transactions.length} transactions for /assistant`);
 
     // Simplify transaction data to essential fields only
     const formattedTransactions = transactions.map(t => ({
@@ -250,7 +270,6 @@ app.post('/assistant', async (req, res) => {
         requestedDateRange: { startDate: formattedStartDate, endDate: formattedEndDate }
       } : null,
       query: {
-        url: bubbleURL,
         constraints,
         userId
       }
@@ -300,9 +319,13 @@ app.get('/api/test-transactions', async (req, res) => {
       { "key": "Date", "constraint_type": "greater than or equal", "value": formattedStartDate },
       { "key": "Date", "constraint_type": "less than or equal", "value": formattedEndDate }
     ];
-    const bubbleURL = `${process.env.BUBBLE_API_URL}/transactions?constraints=${encodeURIComponent(JSON.stringify(constraints))}&sort_field=Date&sort_direction=descending`;
-    console.log('🔍 Test endpoint URL:', bubbleURL);
-    const response = await axios.get(bubbleURL, {
+    const bubbleURL = `${process.env.BUBBLE_API_URL}/transactions`;
+    console.log('🔍 Test endpoint posting request to:', bubbleURL);
+    const response = await axios.post(bubbleURL, {
+      constraints,
+      sort_field: 'Date',
+      sort_direction: 'descending'
+    }, {
       headers: { 'Authorization': `Bearer ${process.env.BUBBLE_API_KEY}` }
     });
     const transactions = response.data?.response?.results || [];
@@ -311,7 +334,7 @@ app.get('/api/test-transactions', async (req, res) => {
         userId,
         dateRange: { startDate: formattedStartDate, endDate: formattedEndDate },
         currentTime: new Date().toISOString(),
-        constraints: JSON.parse(decodeURIComponent(bubbleURL.split('constraints=')[1].split('&')[0]))
+        constraints
       },
       responseInfo: {
         totalTransactions: transactions.length,
