@@ -298,11 +298,12 @@ app.post('/assistant', async (req, res) => {
             }
         });
         
+        // Use supported constraint types and add a small buffer to dates
         const constraints = JSON.stringify([
             {"key": "Created By", "constraint_type": "equals", "value": userId},
             {"key": "is_pending?", "constraint_type": "equals", "value": "false"},
-            {"key": "Date", "constraint_type": "greater than or equal", "value": ninetyDaysAgo},
-            {"key": "Date", "constraint_type": "less than or equal", "value": today}
+            {"key": "Date", "constraint_type": "greater than", "value": ninetyDaysAgo},
+            {"key": "Date", "constraint_type": "less than", "value": today}
         ]);
         
         const bubbleURL = `${process.env.BUBBLE_API_URL}/transactions?constraints=${encodeURIComponent(constraints)}&sort_field=Date&sort_direction=descending&limit=100`;
@@ -314,106 +315,129 @@ app.post('/assistant', async (req, res) => {
             currentServerTime: new Date().toISOString()
         });
 
-        const transactionResponse = await axios.get(bubbleURL, {
-            headers: { 'Authorization': `Bearer ${process.env.BUBBLE_API_KEY}` }
-        });
-
-        const transactions = transactionResponse.data?.response?.results || [];
-        console.log(`✅ Retrieved ${transactions.length} transactions`);
-        
-        // Debug: Log all transaction dates with more details
-        console.log("📊 All transaction dates with details:");
-        transactions.forEach((t, index) => {
-            const transactionDate = new Date(t.Date);
-            console.log(`${index + 1}. Date: ${t.Date} (${transactionDate.toLocaleString()}), Amount: ${t.Amount}, Bank: ${t.Bank}, Description: ${t.Description}, Month: ${t.Month}, Year: ${t.Year}`);
-        });
-
-        // Log transactions by month and year
-        const transactionsByMonthYear = transactions.reduce((acc, t) => {
-            const monthYear = `${t.Month} ${t.Year}`;
-            if (!acc[monthYear]) {
-                acc[monthYear] = [];
-            }
-            acc[monthYear].push(t);
-            return acc;
-        }, {});
-
-        console.log("\n📅 Transactions by month and year:");
-        Object.entries(transactionsByMonthYear).forEach(([monthYear, txs]) => {
-            console.log(`${monthYear}: ${txs.length} transactions`);
-            txs.slice(0, 3).forEach(t => {
-                console.log(`  - ${t.Date}: ${t.Amount} - ${t.Description}`);
+        try {
+            const transactionResponse = await axios.get(bubbleURL, {
+                headers: { 'Authorization': `Bearer ${process.env.BUBBLE_API_KEY}` }
             });
-        });
 
-        // Sort transactions by date to ensure we get the most recent ones
-        const sortedTransactions = [...transactions].sort((a, b) => {
-            return new Date(b.Date) - new Date(a.Date);
-        });
+            const transactions = transactionResponse.data?.response?.results || [];
+            console.log(`✅ Retrieved ${transactions.length} transactions`);
+            
+            // Debug: Log all transaction dates with more details
+            console.log("📊 All transaction dates with details:");
+            transactions.forEach((t, index) => {
+                const transactionDate = new Date(t.Date);
+                console.log(`${index + 1}. Date: ${t.Date} (${transactionDate.toLocaleString()}), Amount: ${t.Amount}, Bank: ${t.Bank}, Description: ${t.Description}, Month: ${t.Month}, Year: ${t.Year}`);
+            });
 
-        // Take only the most recent 30 transactions for GPT-4
-        const recentTransactions = sortedTransactions.slice(0, 30);
-
-        // Format transactions with minimal fields for GPT-4
-        const formattedTransactions = recentTransactions.map(t => ({
-            // Only include the most essential fields
-            date: t.Date ? new Date(t.Date).toLocaleString() : '',
-            amount: parseFloat(t.Amount).toFixed(2),
-            bank: t.Bank || '',
-            description: t.Description || 'No description',
-            category: t['Category (Old)'] || t.Category || 'Uncategorized'
-        }));
-
-        // Add debug information to the response
-        const debugInfo = {
-            totalTransactions: transactions.length,
-            recentTransactionsUsed: recentTransactions.length,
-            dateRange: transactions.length > 0 ? {
-                earliest: transactions[transactions.length - 1].Date,
-                latest: transactions[0].Date,
-                currentServerTime: new Date().toISOString(),
-                requestedDateRange: {
-                    startDate: ninetyDaysAgo,
-                    endDate: today
+            // Log transactions by month and year
+            const transactionsByMonthYear = transactions.reduce((acc, t) => {
+                const monthYear = `${t.Month} ${t.Year}`;
+                if (!acc[monthYear]) {
+                    acc[monthYear] = [];
                 }
-            } : null,
-            query: {
-                url: bubbleURL,
-                constraints: JSON.parse(constraints),
-                userId
-            }
-        };
+                acc[monthYear].push(t);
+                return acc;
+            }, {});
 
-        // 🔥 Step 2: Send to OpenAI for analysis with enhanced prompt
-        const openAIResponse = await client.chat.completions.create({
-            model: "gpt-4",
-            messages: [
-                {
-                    role: "system",
-                    content: "You are the Bountisphere Money Coach—a friendly, supportive, and expert financial assistant. When analyzing transactions:\n" +
-                            "1. Focus on the most recent and relevant transactions\n" +
-                            "2. Include bank names and transaction types\n" +
-                            "3. Use categories for context\n" +
-                            "4. Format amounts with currency codes\n" +
-                            "5. Look for patterns and trends across transactions\n" +
-                            "6. Consider the full date range when answering questions"
-                },
-                {
-                    role: "user",
-                    content: `Please analyze these transactions and answer the following question: ${input}\n\nTransactions: ${JSON.stringify(formattedTransactions, null, 2)}`
+            console.log("\n📅 Transactions by month and year:");
+            Object.entries(transactionsByMonthYear).forEach(([monthYear, txs]) => {
+                console.log(`${monthYear}: ${txs.length} transactions`);
+                txs.slice(0, 3).forEach(t => {
+                    console.log(`  - ${t.Date}: ${t.Amount} - ${t.Description}`);
+                });
+            });
+
+            // Sort transactions by date to ensure we get the most recent ones
+            const sortedTransactions = [...transactions].sort((a, b) => {
+                return new Date(b.Date) - new Date(a.Date);
+            });
+
+            // Take only the most recent 30 transactions for GPT-4
+            const recentTransactions = sortedTransactions.slice(0, 30);
+
+            // Format transactions with minimal fields for GPT-4
+            const formattedTransactions = recentTransactions.map(t => ({
+                // Only include the most essential fields
+                date: t.Date ? new Date(t.Date).toLocaleString() : '',
+                amount: parseFloat(t.Amount).toFixed(2),
+                bank: t.Bank || '',
+                description: t.Description || 'No description',
+                category: t['Category (Old)'] || t.Category || 'Uncategorized'
+            }));
+
+            // Add debug information to the response
+            const debugInfo = {
+                totalTransactions: transactions.length,
+                recentTransactionsUsed: recentTransactions.length,
+                dateRange: transactions.length > 0 ? {
+                    earliest: transactions[transactions.length - 1].Date,
+                    latest: transactions[0].Date,
+                    currentServerTime: new Date().toISOString(),
+                    requestedDateRange: {
+                        startDate: ninetyDaysAgo,
+                        endDate: today
+                    }
+                } : null,
+                query: {
+                    url: bubbleURL,
+                    constraints: JSON.parse(constraints),
+                    userId
                 }
-            ],
-            temperature: 0.7
-        });
+            };
 
-        // 🔥 Step 3: Return formatted response with debug info
-        return res.json({
-            success: true,
-            answer: openAIResponse.choices[0].message.content,
-            transactions: formattedTransactions,
-            debug: debugInfo
-        });
+            // 🔥 Step 2: Send to OpenAI for analysis with enhanced prompt
+            const openAIResponse = await client.chat.completions.create({
+                model: "gpt-4",
+                messages: [
+                    {
+                        role: "system",
+                        content: "You are the Bountisphere Money Coach—a friendly, supportive, and expert financial assistant. When analyzing transactions:\n" +
+                                "1. Focus on the most recent and relevant transactions\n" +
+                                "2. Include bank names and transaction types\n" +
+                                "3. Use categories for context\n" +
+                                "4. Format amounts with currency codes\n" +
+                                "5. Look for patterns and trends across transactions\n" +
+                                "6. Consider the full date range when answering questions"
+                    },
+                    {
+                        role: "user",
+                        content: `Please analyze these transactions and answer the following question: ${input}\n\nTransactions: ${JSON.stringify(formattedTransactions, null, 2)}`
+                    }
+                ],
+                temperature: 0.7
+            });
 
+            // 🔥 Step 3: Return formatted response with debug info
+            return res.json({
+                success: true,
+                answer: openAIResponse.choices[0].message.content,
+                transactions: formattedTransactions,
+                debug: debugInfo
+            });
+
+        } catch (error) {
+            console.error("❌ Error fetching transactions:", error.response?.data || error.message);
+            console.error("Full error:", error);
+            console.error("Error response:", error.response?.data);
+            console.error("Error status:", error.response?.status);
+            console.error("Error headers:", error.response?.headers);
+            console.error("Request URL:", error.config?.url);
+            console.error("Request method:", error.config?.method);
+            console.error("Request headers:", error.config?.headers);
+            
+            res.status(500).json({ 
+                error: 'Internal server error', 
+                details: error.message,
+                url: error.config?.url || 'URL not available',
+                response: error.response?.data,
+                status: error.response?.status,
+                requestDetails: {
+                    method: error.config?.method,
+                    headers: error.config?.headers ? Object.keys(error.config.headers) : null
+                }
+            });
+        }
     } catch (error) {
         console.error("❌ Error in /assistant endpoint:", error.response?.data || error.message);
         console.error("Full error:", error);
