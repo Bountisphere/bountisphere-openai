@@ -311,15 +311,15 @@ app.post('/assistant', async (req, res) => {
             queryRange: {
                 start: startDate,
                 end: endDate,
-                explanation: "Using Bubble's ISO format with milliseconds (YYYY-MM-DDTHH:mm:ss.000Z)"
+                explanation: "Using Bubble's ISO format with supported operators"
             }
         });
         
         // Use supported constraint types with ISO dates
         const constraints = JSON.stringify([
             {"key": "Created By", "constraint_type": "equals", "value": userId},
-            {"key": "Date", "constraint_type": "greater than or equal", "value": startDate},
-            {"key": "Date", "constraint_type": "less than or equal", "value": endDate}
+            {"key": "Date", "constraint_type": "greater than", "value": startDate},
+            {"key": "Date", "constraint_type": "less than", "value": endDate}
         ]);
         
         // Increase limit to ensure we get all transactions
