@@ -271,10 +271,11 @@ app.post('/ask-question', async (req, res) => {
 // 🔹 OpenAI Assistant Endpoint
 app.post('/assistant', async (req, res) => {
     try {
-        const { input } = req.body;
+        const { input, startDate, endDate } = req.body;
         const userId = req.query.userId?.trim();
 
         console.log("📥 Received request with userId:", userId);
+        console.log("📅 Date range requested:", { startDate, endDate });
 
         if (!userId || !input) {
             return res.status(400).json({ error: 'User ID and input are required' });
@@ -288,22 +289,33 @@ app.post('/assistant', async (req, res) => {
         const MAX_PAGES = 10;
         const TRANSACTIONS_PER_PAGE = 100;
 
-        // Try to find March transactions specifically
-        const marchConstraints = [
+        // Calculate default date range if not provided (last 90 days)
+        const currentDate = new Date();
+        const defaultStartDate = new Date(currentDate);
+        defaultStartDate.setDate(currentDate.getDate() - 90);
+
+        const effectiveStartDate = startDate ? new Date(startDate) : defaultStartDate;
+        const effectiveEndDate = endDate ? new Date(endDate) : currentDate;
+
+        // Build date range constraints
+        const dateConstraints = [
             {"key": "Created By", "constraint_type": "equals", "value": userId},
-            {"key": "Month", "constraint_type": "equals", "value": "Mar"},
-            {"key": "Year", "constraint_type": "equals", "value": "2025"}
+            {"key": "Date", "constraint_type": "greater than", "value": effectiveStartDate.toISOString()},
+            {"key": "Date", "constraint_type": "less than", "value": effectiveEndDate.toISOString()}
         ];
 
         try {
-            console.log("🔍 Searching specifically for March 2025 transactions...");
+            console.log("🔍 Searching for transactions in date range:", {
+                start: effectiveStartDate.toISOString(),
+                end: effectiveEndDate.toISOString()
+            });
             
-            // First attempt: Search by Month and Year
+            // Fetch transactions with pagination
             while (hasMore && pageCount < MAX_PAGES) {
                 const cursorParam = cursor ? `&cursor=${cursor}` : '';
-                const bubbleURL = `${process.env.BUBBLE_API_URL}/transactions?constraints=${encodeURIComponent(JSON.stringify(marchConstraints))}&sort_field=Date&sort_direction=descending&limit=${TRANSACTIONS_PER_PAGE}${cursorParam}`;
+                const bubbleURL = `${process.env.BUBBLE_API_URL}/transactions?constraints=${encodeURIComponent(JSON.stringify(dateConstraints))}&sort_field=Date&sort_direction=descending&limit=${TRANSACTIONS_PER_PAGE}${cursorParam}`;
 
-                console.log(`🔄 Fetching March transactions page ${pageCount + 1} with cursor:`, cursor || 'initial');
+                console.log(`🔄 Fetching transactions page ${pageCount + 1} with cursor:`, cursor || 'initial');
 
                 const response = await axios.get(bubbleURL, {
                     headers: { 'Authorization': `Bearer ${process.env.BUBBLE_API_KEY}` },
@@ -312,12 +324,12 @@ app.post('/assistant', async (req, res) => {
 
                 const pageTransactions = response.data?.response?.results || [];
                 
-                // Log each transaction's date and Month field
+                // Log each transaction's date and details
                 pageTransactions.forEach(t => {
                     console.log(`📅 Transaction:`, {
                         date: t.Date,
-                        month: t.Month,
-                        year: t.Year,
+                        month: new Date(t.Date).toLocaleString('en-US', { month: 'short' }),
+                        year: new Date(t.Date).getFullYear(),
                         amount: t.Amount,
                         description: t.Description
                     });
@@ -328,56 +340,13 @@ app.post('/assistant', async (req, res) => {
                 hasMore = response.data?.response?.remaining > 0;
                 pageCount++;
 
-                console.log(`📈 March Search Progress:`, {
+                console.log(`📈 Search Progress:`, {
                     page: pageCount,
                     newTransactions: pageTransactions.length,
                     totalSoFar: allTransactions.length,
                     hasMore,
                     nextCursor: cursor
                 });
-            }
-
-            // If no March transactions found, try with date range as backup
-            if (allTransactions.length === 0) {
-                console.log("⚠️ No March transactions found using Month field, trying date range...");
-                
-                const marchStart = new Date('2025-03-01T00:00:00.000Z');
-                const marchEnd = new Date('2025-03-31T23:59:59.999Z');
-                
-                const dateConstraints = [
-                    {"key": "Created By", "constraint_type": "equals", "value": userId},
-                    {"key": "Date", "constraint_type": "greater than", "value": marchStart.toISOString()},
-                    {"key": "Date", "constraint_type": "less than", "value": marchEnd.toISOString()}
-                ];
-
-                cursor = null;
-                hasMore = true;
-                pageCount = 0;
-
-                while (hasMore && pageCount < MAX_PAGES) {
-                    const cursorParam = cursor ? `&cursor=${cursor}` : '';
-                    const bubbleURL = `${process.env.BUBBLE_API_URL}/transactions?constraints=${encodeURIComponent(JSON.stringify(dateConstraints))}&sort_field=Date&sort_direction=descending&limit=${TRANSACTIONS_PER_PAGE}${cursorParam}`;
-
-                    console.log(`🔄 Fetching March (by date) page ${pageCount + 1}`);
-
-                    const response = await axios.get(bubbleURL, {
-                        headers: { 'Authorization': `Bearer ${process.env.BUBBLE_API_KEY}` },
-                        timeout: 15000
-                    });
-
-                    const pageTransactions = response.data?.response?.results || [];
-                    allTransactions = [...allTransactions, ...pageTransactions];
-                    cursor = response.data?.response?.cursor;
-                    hasMore = response.data?.response?.remaining > 0;
-                    pageCount++;
-
-                    console.log(`📈 March Date Range Progress:`, {
-                        page: pageCount,
-                        newTransactions: pageTransactions.length,
-                        totalSoFar: allTransactions.length,
-                        hasMore
-                    });
-                }
             }
 
             // Sort all transactions by date (newest first)
@@ -396,8 +365,8 @@ app.post('/assistant', async (req, res) => {
                 description: t.Description || 'No description',
                 category: t['Category (Old)'] || t.Category || 'Uncategorized',
                 is_pending: t['is_pending?'] || 'false',
-                month: t.Month,
-                year: t.Year
+                month: new Date(t.Date).toLocaleString('en-US', { month: 'short' }),
+                year: new Date(t.Date).getFullYear()
             }));
 
             // Analyze monthly distribution
@@ -417,9 +386,7 @@ app.post('/assistant', async (req, res) => {
                     acc[monthKey].transactions.push({
                         date: t.Date,
                         amount: t.Amount,
-                        description: t.Description,
-                        month: t.Month,
-                        year: t.Year
+                        description: t.Description
                     });
                 }
                 return acc;
@@ -454,20 +421,20 @@ app.post('/assistant', async (req, res) => {
                         transactionsPerPage: TRANSACTIONS_PER_PAGE
                     },
                     dateRange: {
-                        earliest: sortedTransactions[sortedTransactions.length - 1]?.Date,
-                        latest: sortedTransactions[0]?.Date,
-                        currentServerTime: new Date().toISOString()
+                        requestedRange: {
+                            start: effectiveStartDate.toISOString(),
+                            end: effectiveEndDate.toISOString(),
+                            isDefault: !startDate && !endDate
+                        },
+                        actual: {
+                            earliest: sortedTransactions[sortedTransactions.length - 1]?.Date,
+                            latest: sortedTransactions[0]?.Date,
+                            currentServerTime: new Date().toISOString()
+                        }
                     },
                     monthlyStats,
-                    marchSearchResults: {
-                        byMonthField: allTransactions.filter(t => t.Month === 'Mar' && t.Year === '2025').length,
-                        byDateRange: allTransactions.filter(t => {
-                            const date = new Date(t.Date);
-                            return date.getMonth() === 2 && date.getFullYear() === 2025;
-                        }).length
-                    },
                     query: {
-                        marchConstraints,
+                        dateConstraints,
                         userId
                     }
                 }
