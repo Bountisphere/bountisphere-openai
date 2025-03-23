@@ -281,15 +281,15 @@ app.post('/assistant', async (req, res) => {
             return res.status(400).json({ error: 'User ID and input are required' });
         }
 
-        // Initialize arrays and tracking variables
+        // Initialize tracking variables
         let allTransactions = new Map(); // Use Map to prevent duplicates
         let cursor = null;
         let hasMore = true;
         let pageCount = 0;
-        const MAX_PAGES = 20; // Increased from 10 to 20
+        const MAX_PAGES = 20;
         const TRANSACTIONS_PER_PAGE = 100;
 
-        // Calculate default date range if not provided (last 90 days)
+        // Calculate effective date range
         const currentDate = new Date();
         const defaultStartDate = new Date(currentDate);
         defaultStartDate.setDate(currentDate.getDate() - 90);
@@ -297,25 +297,22 @@ app.post('/assistant', async (req, res) => {
         const effectiveStartDate = startDate ? new Date(startDate) : defaultStartDate;
         const effectiveEndDate = endDate ? new Date(endDate) : currentDate;
 
-        // Build date range constraints
-        const dateConstraints = [
-            {"key": "Created By", "constraint_type": "equals", "value": userId},
-            {"key": "Date", "constraint_type": "greater than", "value": effectiveStartDate.toISOString()},
-            {"key": "Date", "constraint_type": "less than", "value": effectiveEndDate.toISOString()}
-        ];
-
         try {
-            console.log("🔍 Searching for transactions in date range:", {
-                start: effectiveStartDate.toISOString(),
-                end: effectiveEndDate.toISOString()
+            // First attempt: Try to find transactions using Month and Year fields
+            const monthYearConstraints = [
+                {"key": "Created By", "constraint_type": "equals", "value": userId},
+                {"key": "Month", "constraint_type": "equals", "value": effectiveStartDate.toLocaleString('en-US', { month: 'short' })},
+                {"key": "Year", "constraint_type": "equals", "value": effectiveStartDate.getFullYear().toString()}
+            ];
+
+            console.log("🔍 First attempt: Searching by Month/Year fields...", {
+                constraints: monthYearConstraints
             });
-            
-            // Fetch transactions with pagination
+
+            // First search with Month/Year
             while (hasMore && pageCount < MAX_PAGES) {
                 const cursorParam = cursor ? `&cursor=${cursor}` : '';
-                const bubbleURL = `${process.env.BUBBLE_API_URL}/transactions?constraints=${encodeURIComponent(JSON.stringify(dateConstraints))}&sort_field=Date&sort_direction=descending&limit=${TRANSACTIONS_PER_PAGE}${cursorParam}`;
-
-                console.log(`🔄 Fetching transactions page ${pageCount + 1} with cursor:`, cursor || 'initial');
+                const bubbleURL = `${process.env.BUBBLE_API_URL}/transactions?constraints=${encodeURIComponent(JSON.stringify(monthYearConstraints))}&sort_field=Date&sort_direction=descending&limit=${TRANSACTIONS_PER_PAGE}${cursorParam}`;
 
                 const response = await axios.get(bubbleURL, {
                     headers: { 'Authorization': `Bearer ${process.env.BUBBLE_API_KEY}` },
@@ -324,15 +321,14 @@ app.post('/assistant', async (req, res) => {
 
                 const pageTransactions = response.data?.response?.results || [];
                 
-                // Add transactions to Map using a unique key to prevent duplicates
                 pageTransactions.forEach(t => {
-                    const transactionKey = `${t.Date}_${t.Amount}_${t.Description}_${t.Bank || ''}`; // Unique key
+                    const transactionKey = `${t.Date}_${t.Amount}_${t.Description}_${t.Bank || ''}`;
                     if (!allTransactions.has(transactionKey)) {
                         allTransactions.set(transactionKey, t);
-                        console.log(`📅 New unique transaction:`, {
+                        console.log(`📅 New transaction (Month/Year search):`, {
                             date: t.Date,
-                            month: new Date(t.Date).toLocaleString('en-US', { month: 'short' }),
-                            year: new Date(t.Date).getFullYear(),
+                            month: t.Month,
+                            year: t.Year,
                             amount: t.Amount,
                             description: t.Description
                         });
@@ -342,18 +338,50 @@ app.post('/assistant', async (req, res) => {
                 cursor = response.data?.response?.cursor;
                 hasMore = response.data?.response?.remaining > 0;
                 pageCount++;
+            }
 
-                console.log(`📈 Search Progress:`, {
-                    page: pageCount,
-                    newUniqueTransactions: allTransactions.size,
-                    hasMore,
-                    nextCursor: cursor
-                });
+            // If no transactions found, try with date range
+            if (allTransactions.size === 0) {
+                console.log("⚠️ No transactions found using Month/Year fields, trying date range...");
+                
+                const dateConstraints = [
+                    {"key": "Created By", "constraint_type": "equals", "value": userId},
+                    {"key": "Date", "constraint_type": "greater than", "value": effectiveStartDate.toISOString()},
+                    {"key": "Date", "constraint_type": "less than", "value": effectiveEndDate.toISOString()}
+                ];
 
-                // Break if we have enough transactions
-                if (allTransactions.size >= 1000) {
-                    console.log("🛑 Reached maximum transaction limit (1000)");
-                    break;
+                cursor = null;
+                hasMore = true;
+                pageCount = 0;
+
+                while (hasMore && pageCount < MAX_PAGES) {
+                    const cursorParam = cursor ? `&cursor=${cursor}` : '';
+                    const bubbleURL = `${process.env.BUBBLE_API_URL}/transactions?constraints=${encodeURIComponent(JSON.stringify(dateConstraints))}&sort_field=Date&sort_direction=descending&limit=${TRANSACTIONS_PER_PAGE}${cursorParam}`;
+
+                    const response = await axios.get(bubbleURL, {
+                        headers: { 'Authorization': `Bearer ${process.env.BUBBLE_API_KEY}` },
+                        timeout: 15000
+                    });
+
+                    const pageTransactions = response.data?.response?.results || [];
+                    
+                    pageTransactions.forEach(t => {
+                        const transactionKey = `${t.Date}_${t.Amount}_${t.Description}_${t.Bank || ''}`;
+                        if (!allTransactions.has(transactionKey)) {
+                            allTransactions.set(transactionKey, t);
+                            console.log(`📅 New transaction (Date range search):`, {
+                                date: t.Date,
+                                month: new Date(t.Date).toLocaleString('en-US', { month: 'short' }),
+                                year: new Date(t.Date).getFullYear(),
+                                amount: t.Amount,
+                                description: t.Description
+                            });
+                        }
+                    });
+
+                    cursor = response.data?.response?.cursor;
+                    hasMore = response.data?.response?.remaining > 0;
+                    pageCount++;
                 }
             }
 
@@ -366,35 +394,55 @@ app.post('/assistant', async (req, res) => {
             const recentTransactions = sortedTransactions.slice(0, 50);
 
             // Format transactions for GPT-4
-            const formattedTransactions = recentTransactions.map(t => ({
-                date: new Date(t.Date).toLocaleString(),
-                amount: parseFloat(t.Amount).toFixed(2),
-                bank: t.Bank || '',
-                description: t.Description || 'No description',
-                category: t['Category (Old)'] || t.Category || 'Uncategorized',
-                is_pending: t['is_pending?'] || 'false',
-                month: new Date(t.Date).toLocaleString('en-US', { month: 'short' }),
-                year: new Date(t.Date).getFullYear()
-            }));
+            const formattedTransactions = recentTransactions.map(t => {
+                const transactionDate = new Date(t.Date);
+                const isPending = t['is_pending?'] === 'true';
+                const isFutureDate = transactionDate > currentDate;
+                
+                return {
+                    date: transactionDate.toLocaleString(),
+                    amount: parseFloat(t.Amount).toFixed(2),
+                    bank: t.Bank || '',
+                    description: t.Description || 'No description',
+                    category: t['Category (Old)'] || t.Category || 'Uncategorized',
+                    is_pending: isPending || isFutureDate ? 'true' : 'false',
+                    month: transactionDate.toLocaleString('en-US', { month: 'short' }),
+                    year: transactionDate.getFullYear(),
+                    transaction_status: isPending ? 'pending' : 
+                                      isFutureDate ? 'future' : 
+                                      'completed'
+                };
+            });
 
-            // Analyze monthly distribution
+            // Analyze monthly distribution with status tracking
             const monthlyStats = sortedTransactions.reduce((acc, t) => {
                 const date = new Date(t.Date);
                 const monthKey = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+                const isPending = t['is_pending?'] === 'true';
+                const isFutureDate = date > currentDate;
+                const status = isPending ? 'pending' : isFutureDate ? 'future' : 'completed';
+                
                 if (!acc[monthKey]) {
                     acc[monthKey] = {
                         count: 0,
                         total: 0,
-                        transactions: []
+                        transactions: [],
+                        status_breakdown: {
+                            pending: 0,
+                            future: 0,
+                            completed: 0
+                        }
                     };
                 }
                 acc[monthKey].count++;
                 acc[monthKey].total += parseFloat(t.Amount) || 0;
+                acc[monthKey].status_breakdown[status]++;
                 if (acc[monthKey].transactions.length < 3) {
                     acc[monthKey].transactions.push({
                         date: t.Date,
                         amount: t.Amount,
-                        description: t.Description
+                        description: t.Description,
+                        status: status
                     });
                 }
                 return acc;
@@ -441,7 +489,19 @@ app.post('/assistant', async (req, res) => {
                         }
                     },
                     monthlyStats,
+                    searchResults: {
+                        byMonthField: Array.from(allTransactions.values()).filter(t => 
+                            t.Month === effectiveStartDate.toLocaleString('en-US', { month: 'short' }) && 
+                            t.Year === effectiveStartDate.getFullYear().toString()
+                        ).length,
+                        byDateRange: Array.from(allTransactions.values()).filter(t => {
+                            const date = new Date(t.Date);
+                            return date.getMonth() === effectiveStartDate.getMonth() && 
+                                   date.getFullYear() === effectiveStartDate.getFullYear();
+                        }).length
+                    },
                     query: {
+                        monthYearConstraints,
                         dateConstraints,
                         userId
                     }
