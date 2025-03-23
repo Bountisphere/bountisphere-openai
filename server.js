@@ -520,37 +520,81 @@ app.post('/assistant', async (req, res) => {
 
                 // Return in a format matching OpenAI Responses
                 return res.json({
-                    id: `resp_${Date.now()}`,
+                    id: `resp_${Date.now().toString(16)}${Math.random().toString(16).substring(2)}`,
                     object: "response",
                     created_at: Math.floor(Date.now() / 1000),
-                    model: "gpt-4",
+                    model: "gpt-4o-mini-2024-07-18",
                     status: "completed",
+                    error: null,
+                    incomplete_details: null,
+                    instructions: "You are the Bountisphere Money Coach—a friendly, supportive, and expert financial assistant. If the user's question involves transaction details, call the 'get_user_transactions' function with the userId provided in the prompt. For general financial advice, you can use web search to find current information and the vector store to access documentation.",
                     output: [
                         {
                             type: "function_call",
+                            id: `fc_${Date.now().toString(16)}${Math.random().toString(16).substring(2)}`,
+                            call_id: `call_${Math.random().toString(36).substring(2)}`,
                             name: "get_user_transactions",
                             arguments: JSON.stringify({ startDate, endDate }),
                             status: "completed"
                         }
                     ],
+                    parallel_tool_calls: true,
                     text: {
                         format: { type: "text" },
                         value: finalResponse.choices[0].message.content
                     },
                     transactions: formattedTransactions,
+                    tool_choice: "auto",
                     tools: [
                         {
                             type: "file_search",
+                            filters: null,
+                            max_num_results: 20,
+                            ranking_options: {
+                                ranker: "auto",
+                                score_threshold: 0
+                            },
                             vector_store_ids: ["vs_JScHftFeKAv35y4QHPz9QwMb"]
                         },
                         {
-                            type: "web_search_preview"
+                            type: "web_search_preview",
+                            search_context_size: "medium",
+                            user_location: {
+                                type: "approximate",
+                                country: "US"
+                            }
                         },
                         {
                             type: "function",
-                            name: "get_user_transactions"
+                            name: "get_user_transactions",
+                            description: "Get the user's transactions when they ask about their spending, transactions, or financial activity",
+                            parameters: {
+                                type: "object",
+                                properties: {
+                                    startDate: {
+                                        type: "string",
+                                        description: "Optional start date in YYYY-MM-DD format"
+                                    },
+                                    endDate: {
+                                        type: "string",
+                                        description: "Optional end date in YYYY-MM-DD format"
+                                    }
+                                }
+                            },
+                            strict: true
                         }
                     ],
+                    usage: {
+                        input_tokens: 1000, // Approximate
+                        input_tokens_details: {
+                            cached_tokens: 0
+                        },
+                        output_tokens: finalResponse.usage?.completion_tokens || 0,
+                        output_tokens_details: {
+                            reasoning_tokens: 0
+                        },
+                        total_tokens: finalResponse.usage?.total_tokens || 0
+                    },
                     debug: {
                         totalTransactions: allTransactions.size,
                         recentTransactionsUsed: formattedTransactions.length,
@@ -599,29 +643,71 @@ app.post('/assistant', async (req, res) => {
             // If no function call, return regular response in OpenAI Responses format
             console.log("📝 Regular response (no transactions needed)");
             return res.json({
-                id: `resp_${Date.now()}`,
+                id: `resp_${Date.now().toString(16)}${Math.random().toString(16).substring(2)}`,
                 object: "response",
                 created_at: Math.floor(Date.now() / 1000),
-                model: "gpt-4",
+                model: "gpt-4o-mini-2024-07-18",
                 status: "completed",
+                error: null,
+                incomplete_details: null,
+                instructions: "You are the Bountisphere Money Coach—a friendly, supportive, and expert financial assistant. If the user's question involves transaction details, call the 'get_user_transactions' function with the userId provided in the prompt. For general financial advice, you can use web search to find current information and the vector store to access documentation.",
                 output: [],
+                parallel_tool_calls: true,
                 text: {
                     format: { type: "text" },
                     value: openAIResponse.choices[0].message.content
                 },
+                tool_choice: "auto",
                 tools: [
                     {
                         type: "file_search",
+                        filters: null,
+                        max_num_results: 20,
+                        ranking_options: {
+                            ranker: "auto",
+                            score_threshold: 0
+                        },
                         vector_store_ids: ["vs_JScHftFeKAv35y4QHPz9QwMb"]
                     },
                     {
-                        type: "web_search_preview"
+                        type: "web_search_preview",
+                        search_context_size: "medium",
+                        user_location: {
+                            type: "approximate",
+                            country: "US"
+                        }
                     },
                     {
                         type: "function",
-                        name: "get_user_transactions"
+                        name: "get_user_transactions",
+                        description: "Get the user's transactions when they ask about their spending, transactions, or financial activity",
+                        parameters: {
+                            type: "object",
+                            properties: {
+                                startDate: {
+                                    type: "string",
+                                    description: "Optional start date in YYYY-MM-DD format"
+                                },
+                                endDate: {
+                                    type: "string",
+                                    description: "Optional end date in YYYY-MM-DD format"
+                                }
+                            }
+                        },
+                        strict: true
                     }
-                ]
+                ],
+                usage: {
+                    input_tokens: openAIResponse.usage?.prompt_tokens || 0,
+                    input_tokens_details: {
+                        cached_tokens: 0
+                    },
+                    output_tokens: openAIResponse.usage?.completion_tokens || 0,
+                    output_tokens_details: {
+                        reasoning_tokens: 0
+                    },
+                    total_tokens: openAIResponse.usage?.total_tokens || 0
+                }
             });
         }
 
