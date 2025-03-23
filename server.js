@@ -297,14 +297,21 @@ app.post('/assistant', async (req, res) => {
         const effectiveStartDate = startDate ? new Date(startDate) : defaultStartDate;
         const effectiveEndDate = endDate ? new Date(endDate) : currentDate;
 
+        // Initialize constraints
+        const monthYearConstraints = [
+            {"key": "Created By", "constraint_type": "equals", "value": userId},
+            {"key": "Month", "constraint_type": "equals", "value": effectiveStartDate.toLocaleString('en-US', { month: 'short' })},
+            {"key": "Year", "constraint_type": "equals", "value": effectiveStartDate.getFullYear().toString()}
+        ];
+
+        const dateConstraints = [
+            {"key": "Created By", "constraint_type": "equals", "value": userId},
+            {"key": "Date", "constraint_type": "greater than", "value": effectiveStartDate.toISOString()},
+            {"key": "Date", "constraint_type": "less than", "value": effectiveEndDate.toISOString()}
+        ];
+
         try {
             // First attempt: Try to find transactions using Month and Year fields
-            const monthYearConstraints = [
-                {"key": "Created By", "constraint_type": "equals", "value": userId},
-                {"key": "Month", "constraint_type": "equals", "value": effectiveStartDate.toLocaleString('en-US', { month: 'short' })},
-                {"key": "Year", "constraint_type": "equals", "value": effectiveStartDate.getFullYear().toString()}
-            ];
-
             console.log("🔍 First attempt: Searching by Month/Year fields...", {
                 constraints: monthYearConstraints
             });
@@ -343,12 +350,6 @@ app.post('/assistant', async (req, res) => {
             // If no transactions found, try with date range
             if (allTransactions.size === 0) {
                 console.log("⚠️ No transactions found using Month/Year fields, trying date range...");
-                
-                const dateConstraints = [
-                    {"key": "Created By", "constraint_type": "equals", "value": userId},
-                    {"key": "Date", "constraint_type": "greater than", "value": effectiveStartDate.toISOString()},
-                    {"key": "Date", "constraint_type": "less than", "value": effectiveEndDate.toISOString()}
-                ];
 
                 cursor = null;
                 hasMore = true;
