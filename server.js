@@ -292,49 +292,43 @@ app.post('/assistant', async (req, res) => {
         const currentTime = new Date();
         console.log("🕒 Current server time:", currentTime.toISOString());
 
-        // Set up constraints for completed, past transactions only
+        // Set up constraints - start with just user ID
         const constraints = [
-            {"key": "Created By", "constraint_type": "equals", "value": userId},
-            {"key": "is_pending?", "constraint_type": "equals", "value": false},
-            {"key": "Date", "constraint_type": "less than", "value": currentTime.toISOString()}
+            {"key": "Created By", "constraint_type": "equals", "value": userId}
         ];
 
         try {
-            console.log("🔍 Fetching completed past transactions with constraints:", JSON.stringify(constraints, null, 2));
+            console.log("🔍 Fetching all transactions for user with constraints:", JSON.stringify(constraints, null, 2));
             
             while (hasMore && pageCount < MAX_PAGES) {
                 const cursorParam = cursor ? `&cursor=${cursor}` : '';
                 const bubbleURL = `${process.env.BUBBLE_API_URL}/transactions?constraints=${encodeURIComponent(JSON.stringify(constraints))}&sort_field=Date&sort_direction=descending&limit=${TRANSACTIONS_PER_PAGE}${cursorParam}`;
 
-                console.log(`🔄 Fetching page ${pageCount + 1}`);
+                console.log(`🔄 Fetching page ${pageCount + 1} from URL:`, bubbleURL);
 
                 const response = await axios.get(bubbleURL, {
                     headers: { 'Authorization': `Bearer ${process.env.BUBBLE_API_KEY}` },
                     timeout: 15000
                 });
 
+                console.log("📥 Response data:", JSON.stringify(response.data, null, 2));
+
                 const pageTransactions = response.data?.response?.results || [];
                 
-                // Additional validation to ensure we only get completed past transactions
-                const validTransactions = pageTransactions.filter(t => {
-                    const transactionDate = new Date(t.Date);
-                    return (
-                        transactionDate <= currentTime && // Must be in the past
-                        t['is_pending?'] === "false" && // Must be completed
-                        transactionDate.getTime() === transactionDate.getTime() // Valid date check
-                    );
-                });
+                // Log raw transactions for debugging
+                console.log(`📊 Raw transactions from page ${pageCount + 1}:`, JSON.stringify(pageTransactions, null, 2));
 
-                allTransactions = [...allTransactions, ...validTransactions];
+                allTransactions = [...allTransactions, ...pageTransactions];
                 cursor = response.data?.response?.cursor;
                 hasMore = response.data?.response?.remaining > 0;
                 pageCount++;
 
                 console.log(`📈 Progress:`, {
                     page: pageCount,
-                    newValidTransactions: validTransactions.length,
+                    newTransactions: pageTransactions.length,
                     totalSoFar: allTransactions.length,
-                    hasMore
+                    hasMore,
+                    cursor
                 });
 
                 // Break if we have enough transactions
