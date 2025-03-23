@@ -295,12 +295,12 @@ app.post('/assistant', async (req, res) => {
         // Set up constraints for completed, past transactions only
         const constraints = [
             {"key": "Created By", "constraint_type": "equals", "value": userId},
-            {"key": "is_pending?", "constraint_type": "equals", "value": "false"},
+            {"key": "is_pending?", "constraint_type": "equals", "value": false},
             {"key": "Date", "constraint_type": "less than", "value": currentTime.toISOString()}
         ];
 
         try {
-            console.log("🔍 Fetching completed past transactions...");
+            console.log("🔍 Fetching completed past transactions with constraints:", JSON.stringify(constraints, null, 2));
             
             while (hasMore && pageCount < MAX_PAGES) {
                 const cursorParam = cursor ? `&cursor=${cursor}` : '';
