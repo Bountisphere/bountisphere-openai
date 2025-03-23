@@ -288,57 +288,99 @@ app.post('/assistant', async (req, res) => {
         const MAX_PAGES = 10;
         const TRANSACTIONS_PER_PAGE = 100;
 
-        // Get current server time for filtering
-        const currentTime = new Date();
-        console.log("🕒 Current server time:", currentTime.toISOString());
-
-        // Set up constraints - start with just user ID
-        const constraints = [
-            {"key": "Created By", "constraint_type": "equals", "value": userId}
+        // Try to find March transactions specifically
+        const marchConstraints = [
+            {"key": "Created By", "constraint_type": "equals", "value": userId},
+            {"key": "Month", "constraint_type": "equals", "value": "Mar"},
+            {"key": "Year", "constraint_type": "equals", "value": "2025"}
         ];
 
         try {
-            console.log("🔍 Fetching all transactions for user with constraints:", JSON.stringify(constraints, null, 2));
+            console.log("🔍 Searching specifically for March 2025 transactions...");
             
+            // First attempt: Search by Month and Year
             while (hasMore && pageCount < MAX_PAGES) {
                 const cursorParam = cursor ? `&cursor=${cursor}` : '';
-                const bubbleURL = `${process.env.BUBBLE_API_URL}/transactions?constraints=${encodeURIComponent(JSON.stringify(constraints))}&sort_field=Date&sort_direction=descending&limit=${TRANSACTIONS_PER_PAGE}${cursorParam}`;
+                const bubbleURL = `${process.env.BUBBLE_API_URL}/transactions?constraints=${encodeURIComponent(JSON.stringify(marchConstraints))}&sort_field=Date&sort_direction=descending&limit=${TRANSACTIONS_PER_PAGE}${cursorParam}`;
 
-                console.log(`🔄 Fetching page ${pageCount + 1} from URL:`, bubbleURL);
+                console.log(`🔄 Fetching March transactions page ${pageCount + 1} with cursor:`, cursor || 'initial');
 
                 const response = await axios.get(bubbleURL, {
                     headers: { 'Authorization': `Bearer ${process.env.BUBBLE_API_KEY}` },
                     timeout: 15000
                 });
 
-                console.log("📥 Response data:", JSON.stringify(response.data, null, 2));
-
                 const pageTransactions = response.data?.response?.results || [];
                 
-                // Log raw transactions for debugging
-                console.log(`📊 Raw transactions from page ${pageCount + 1}:`, JSON.stringify(pageTransactions, null, 2));
+                // Log each transaction's date and Month field
+                pageTransactions.forEach(t => {
+                    console.log(`📅 Transaction:`, {
+                        date: t.Date,
+                        month: t.Month,
+                        year: t.Year,
+                        amount: t.Amount,
+                        description: t.Description
+                    });
+                });
 
                 allTransactions = [...allTransactions, ...pageTransactions];
                 cursor = response.data?.response?.cursor;
                 hasMore = response.data?.response?.remaining > 0;
                 pageCount++;
 
-                console.log(`📈 Progress:`, {
+                console.log(`📈 March Search Progress:`, {
                     page: pageCount,
                     newTransactions: pageTransactions.length,
                     totalSoFar: allTransactions.length,
                     hasMore,
-                    cursor
+                    nextCursor: cursor
                 });
+            }
 
-                // Break if we have enough transactions
-                if (allTransactions.length >= 200) {
-                    console.log("📊 Reached maximum transaction limit (200)");
-                    break;
+            // If no March transactions found, try with date range as backup
+            if (allTransactions.length === 0) {
+                console.log("⚠️ No March transactions found using Month field, trying date range...");
+                
+                const marchStart = new Date('2025-03-01T00:00:00.000Z');
+                const marchEnd = new Date('2025-03-31T23:59:59.999Z');
+                
+                const dateConstraints = [
+                    {"key": "Created By", "constraint_type": "equals", "value": userId},
+                    {"key": "Date", "constraint_type": "greater than", "value": marchStart.toISOString()},
+                    {"key": "Date", "constraint_type": "less than", "value": marchEnd.toISOString()}
+                ];
+
+                cursor = null;
+                hasMore = true;
+                pageCount = 0;
+
+                while (hasMore && pageCount < MAX_PAGES) {
+                    const cursorParam = cursor ? `&cursor=${cursor}` : '';
+                    const bubbleURL = `${process.env.BUBBLE_API_URL}/transactions?constraints=${encodeURIComponent(JSON.stringify(dateConstraints))}&sort_field=Date&sort_direction=descending&limit=${TRANSACTIONS_PER_PAGE}${cursorParam}`;
+
+                    console.log(`🔄 Fetching March (by date) page ${pageCount + 1}`);
+
+                    const response = await axios.get(bubbleURL, {
+                        headers: { 'Authorization': `Bearer ${process.env.BUBBLE_API_KEY}` },
+                        timeout: 15000
+                    });
+
+                    const pageTransactions = response.data?.response?.results || [];
+                    allTransactions = [...allTransactions, ...pageTransactions];
+                    cursor = response.data?.response?.cursor;
+                    hasMore = response.data?.response?.remaining > 0;
+                    pageCount++;
+
+                    console.log(`📈 March Date Range Progress:`, {
+                        page: pageCount,
+                        newTransactions: pageTransactions.length,
+                        totalSoFar: allTransactions.length,
+                        hasMore
+                    });
                 }
             }
 
-            // Sort transactions by date (newest first)
+            // Sort all transactions by date (newest first)
             const sortedTransactions = allTransactions.sort((a, b) => {
                 return new Date(b.Date) - new Date(a.Date);
             });
@@ -353,7 +395,7 @@ app.post('/assistant', async (req, res) => {
                 bank: t.Bank || '',
                 description: t.Description || 'No description',
                 category: t['Category (Old)'] || t.Category || 'Uncategorized',
-                is_pending: t['is_pending?'] === "true",
+                is_pending: t['is_pending?'] || 'false',
                 month: t.Month,
                 year: t.Year
             }));
@@ -375,7 +417,9 @@ app.post('/assistant', async (req, res) => {
                     acc[monthKey].transactions.push({
                         date: t.Date,
                         amount: t.Amount,
-                        description: t.Description
+                        description: t.Description,
+                        month: t.Month,
+                        year: t.Year
                     });
                 }
                 return acc;
@@ -387,11 +431,11 @@ app.post('/assistant', async (req, res) => {
                 messages: [
                     {
                         role: "system",
-                        content: "You are the Bountisphere Money Coach. Analyze the transactions and provide insights about spending patterns, focusing on completed past transactions only."
+                        content: "You are the Bountisphere Money Coach. Analyze the transactions and provide insights about spending patterns, focusing on the most recent transactions first."
                     },
                     {
                         role: "user",
-                        content: `Please analyze these completed past transactions and answer: ${input}\n\nTransactions: ${JSON.stringify(formattedTransactions, null, 2)}`
+                        content: `Please analyze these transactions and answer: ${input}\n\nTransactions: ${JSON.stringify(formattedTransactions, null, 2)}`
                     }
                 ],
                 temperature: 0.7
@@ -412,11 +456,18 @@ app.post('/assistant', async (req, res) => {
                     dateRange: {
                         earliest: sortedTransactions[sortedTransactions.length - 1]?.Date,
                         latest: sortedTransactions[0]?.Date,
-                        currentServerTime: currentTime.toISOString()
+                        currentServerTime: new Date().toISOString()
                     },
                     monthlyStats,
+                    marchSearchResults: {
+                        byMonthField: allTransactions.filter(t => t.Month === 'Mar' && t.Year === '2025').length,
+                        byDateRange: allTransactions.filter(t => {
+                            const date = new Date(t.Date);
+                            return date.getMonth() === 2 && date.getFullYear() === 2025;
+                        }).length
+                    },
                     query: {
-                        constraints,
+                        marchConstraints,
                         userId
                     }
                 }
