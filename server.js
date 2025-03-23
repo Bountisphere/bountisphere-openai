@@ -282,11 +282,11 @@ app.post('/assistant', async (req, res) => {
         }
 
         // Initialize arrays and tracking variables
-        let allTransactions = [];
+        let allTransactions = new Map(); // Use Map to prevent duplicates
         let cursor = null;
         let hasMore = true;
         let pageCount = 0;
-        const MAX_PAGES = 10;
+        const MAX_PAGES = 20; // Increased from 10 to 20
         const TRANSACTIONS_PER_PAGE = 100;
 
         // Calculate default date range if not provided (last 90 days)
@@ -324,33 +324,41 @@ app.post('/assistant', async (req, res) => {
 
                 const pageTransactions = response.data?.response?.results || [];
                 
-                // Log each transaction's date and details
+                // Add transactions to Map using a unique key to prevent duplicates
                 pageTransactions.forEach(t => {
-                    console.log(`📅 Transaction:`, {
-                        date: t.Date,
-                        month: new Date(t.Date).toLocaleString('en-US', { month: 'short' }),
-                        year: new Date(t.Date).getFullYear(),
-                        amount: t.Amount,
-                        description: t.Description
-                    });
+                    const transactionKey = `${t.Date}_${t.Amount}_${t.Description}_${t.Bank || ''}`; // Unique key
+                    if (!allTransactions.has(transactionKey)) {
+                        allTransactions.set(transactionKey, t);
+                        console.log(`📅 New unique transaction:`, {
+                            date: t.Date,
+                            month: new Date(t.Date).toLocaleString('en-US', { month: 'short' }),
+                            year: new Date(t.Date).getFullYear(),
+                            amount: t.Amount,
+                            description: t.Description
+                        });
+                    }
                 });
 
-                allTransactions = [...allTransactions, ...pageTransactions];
                 cursor = response.data?.response?.cursor;
                 hasMore = response.data?.response?.remaining > 0;
                 pageCount++;
 
                 console.log(`📈 Search Progress:`, {
                     page: pageCount,
-                    newTransactions: pageTransactions.length,
-                    totalSoFar: allTransactions.length,
+                    newUniqueTransactions: allTransactions.size,
                     hasMore,
                     nextCursor: cursor
                 });
+
+                // Break if we have enough transactions
+                if (allTransactions.size >= 1000) {
+                    console.log("🛑 Reached maximum transaction limit (1000)");
+                    break;
+                }
             }
 
-            // Sort all transactions by date (newest first)
-            const sortedTransactions = allTransactions.sort((a, b) => {
+            // Convert Map back to array and sort
+            const sortedTransactions = Array.from(allTransactions.values()).sort((a, b) => {
                 return new Date(b.Date) - new Date(a.Date);
             });
 
@@ -413,7 +421,7 @@ app.post('/assistant', async (req, res) => {
                 answer: openAIResponse.choices[0].message.content,
                 transactions: formattedTransactions,
                 debug: {
-                    totalTransactions: allTransactions.length,
+                    totalTransactions: allTransactions.size,
                     recentTransactionsUsed: formattedTransactions.length,
                     paginationInfo: {
                         pagesRetrieved: pageCount,
