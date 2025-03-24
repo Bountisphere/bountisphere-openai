@@ -519,7 +519,7 @@ app.post('/assistant', async (req, res) => {
                 });
 
                 // Return in a format matching OpenAI Responses
-                return res.json({
+        return res.json({
                     id: `resp_${Date.now().toString(16)}${Math.random().toString(16).substring(2)}`,
                     object: "response",
                     created_at: Math.floor(Date.now() / 1000),
@@ -529,14 +529,6 @@ app.post('/assistant', async (req, res) => {
                     incomplete_details: null,
                     instructions: "You are the Bountisphere Money Coach—a friendly, supportive, and expert financial assistant. If the user's question involves transaction details, call the 'get_user_transactions' function with the userId provided in the prompt. For general financial advice, you can use web search to find current information and the vector store to access documentation.",
                     output: [
-                        {
-                            type: "function_call",
-                            id: `fc_${Date.now().toString(16)}${Math.random().toString(16).substring(2)}`,
-                            call_id: `call_${Math.random().toString(36).substring(2)}`,
-                            name: "get_user_transactions",
-                            arguments: JSON.stringify({ startDate, endDate }),
-                            status: "completed"
-                        },
                         {
                             type: "message",
                             id: `msg_${Date.now().toString(16)}${Math.random().toString(16).substring(2)}`,
@@ -548,6 +540,14 @@ app.post('/assistant', async (req, res) => {
                                     text: finalResponse.choices[0].message.content
                                 }
                             ]
+                        },
+                        {
+                            type: "function_call",
+                            id: `fc_${Date.now().toString(16)}${Math.random().toString(16).substring(2)}`,
+                            call_id: `call_${Math.random().toString(36).substring(2)}`,
+                            name: "get_user_transactions",
+                            arguments: JSON.stringify({ startDate, endDate }),
+                            status: "completed"
                         }
                     ],
                     parallel_tool_calls: true,
@@ -555,7 +555,7 @@ app.post('/assistant', async (req, res) => {
                         format: { type: "text" },
                         value: finalResponse.choices[0].message.content
                     },
-                    transactions: formattedTransactions,
+            transactions: formattedTransactions,
                     tool_choice: "auto",
                     tools: [
                         {
