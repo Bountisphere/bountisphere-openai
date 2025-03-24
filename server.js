@@ -530,6 +530,14 @@ app.post('/assistant', async (req, res) => {
                     instructions: "You are the Bountisphere Money Coach—a friendly, supportive, and expert financial assistant. If the user's question involves transaction details, call the 'get_user_transactions' function with the userId provided in the prompt. For general financial advice, you can use web search to find current information and the vector store to access documentation.",
                     output: [
                         {
+                            type: "function_call",
+                            id: `fc_${Date.now().toString(16)}${Math.random().toString(16).substring(2)}`,
+                            call_id: `call_${Math.random().toString(36).substring(2)}`,
+                            name: "get_user_transactions",
+                            arguments: JSON.stringify({ startDate, endDate }),
+                            status: "completed"
+                        },
+                        {
                             type: "message",
                             id: `msg_${Date.now().toString(16)}${Math.random().toString(16).substring(2)}`,
                             status: "completed",
@@ -540,14 +548,6 @@ app.post('/assistant', async (req, res) => {
                                     text: finalResponse.choices[0].message.content
                                 }
                             ]
-                        },
-                        {
-                            type: "function_call",
-                            id: `fc_${Date.now().toString(16)}${Math.random().toString(16).substring(2)}`,
-                            call_id: `call_${Math.random().toString(36).substring(2)}`,
-                            name: "get_user_transactions",
-                            arguments: JSON.stringify({ startDate, endDate }),
-                            status: "completed"
                         }
                     ],
                     parallel_tool_calls: true,
@@ -664,6 +664,14 @@ app.post('/assistant', async (req, res) => {
                 incomplete_details: null,
                 instructions: "You are the Bountisphere Money Coach—a friendly, supportive, and expert financial assistant. If the user's question involves transaction details, call the 'get_user_transactions' function with the userId provided in the prompt. For general financial advice, you can use web search to find current information and the vector store to access documentation.",
                 output: [
+                    {
+                        type: "function_call",
+                        id: `fc_${Date.now().toString(16)}${Math.random().toString(16).substring(2)}`,
+                        call_id: `call_${Math.random().toString(36).substring(2)}`,
+                        name: "get_user_transactions",
+                        arguments: JSON.stringify({ startDate, endDate }),
+                        status: "completed"
+                    },
                     {
                         type: "message",
                         id: `msg_${Date.now().toString(16)}${Math.random().toString(16).substring(2)}`,
