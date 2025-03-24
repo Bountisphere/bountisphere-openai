@@ -328,250 +328,150 @@ app.post('/assistant', async (req, res) => {
         console.log("📅 Date range requested:", { startDate, endDate });
 
         if (!userId || !input) {
-            return res.json(formatResponse("function", false, "User ID and input are required."));
+            return res.json({
+                output: [{
+                    type: "text",
+                    text: "User ID and input are required."
+                }]
+            });
         }
 
-        // Initialize tracking variables
-        let allTransactions = new Map();
-        let cursor = null;
-        let hasMore = true;
-        let pageCount = 0;
-        const MAX_PAGES = 20;
-        const TRANSACTIONS_PER_PAGE = 100;
-
-        // Calculate effective date range
-        const currentDate = new Date();
-        const defaultStartDate = new Date(currentDate);
-        defaultStartDate.setDate(currentDate.getDate() - 90);
-
-        const effectiveStartDate = startDate ? new Date(startDate) : defaultStartDate;
-        const effectiveEndDate = endDate ? new Date(endDate) : currentDate;
-
-        // Initialize constraints
-        const monthYearConstraints = [
-            {"key": "Created By", "constraint_type": "equals", "value": userId},
-            {"key": "Month", "constraint_type": "equals", "value": effectiveStartDate.toLocaleString('en-US', { month: 'short' })},
-            {"key": "Year", "constraint_type": "equals", "value": effectiveStartDate.getFullYear().toString()}
-        ];
-
-        const dateConstraints = [
-            {"key": "Created By", "constraint_type": "equals", "value": userId},
-            {"key": "Date", "constraint_type": "greater than", "value": effectiveStartDate.toISOString()},
-            {"key": "Date", "constraint_type": "less than", "value": effectiveEndDate.toISOString()}
-        ];
-
-        try {
-            // First attempt: Try to find transactions using Month and Year fields
-            console.log("🔍 First attempt: Searching by Month/Year fields...", {
-                constraints: monthYearConstraints
-            });
-
-            // First search with Month/Year
-            while (hasMore && pageCount < MAX_PAGES) {
-                const cursorParam = cursor ? `&cursor=${cursor}` : '';
-                const bubbleURL = `${process.env.BUBBLE_API_URL}/transactions?constraints=${encodeURIComponent(JSON.stringify(monthYearConstraints))}&sort_field=Date&sort_direction=descending&limit=${TRANSACTIONS_PER_PAGE}${cursorParam}`;
-
-                const response = await axios.get(bubbleURL, {
-                    headers: { 'Authorization': `Bearer ${process.env.BUBBLE_API_KEY}` },
-                    timeout: 15000
-                });
-
-                const pageTransactions = response.data?.response?.results || [];
-                
-                pageTransactions.forEach(t => {
-                    const transactionKey = `${t.Date}_${t.Amount}_${t.Description}_${t.Bank || ''}`;
-                    if (!allTransactions.has(transactionKey)) {
-                        allTransactions.set(transactionKey, t);
-                        console.log(`📅 New transaction (Month/Year search):`, {
-                            date: t.Date,
-                            month: t.Month,
-                            year: t.Year,
-                            amount: t.Amount,
-                            description: t.Description
-                        });
+        // Get initial response from OpenAI
+        const openAIResponse = await client.chat.completions.create({
+            model: "gpt-4",
+            messages: [
+                {
+                    role: "system",
+                    content: "You are the Bountisphere Money Coach. Analyze the transactions and provide insights about spending patterns, focusing on the most recent transactions first."
+                },
+                {
+                    role: "user",
+                    content: input
+                }
+            ],
+            functions: [
+                {
+                    name: "get_user_transactions",
+                    description: "Fetch a user's transactions from the Bountisphere endpoint for analysis",
+                    parameters: {
+                        type: "object",
+                        properties: {
+                            userId: {
+                                type: "string",
+                                description: "The user ID whose transactions we need to fetch"
+                            }
+                        },
+                        required: ["userId"]
                     }
+                }
+            ],
+            function_call: "auto",
+            temperature: 0.7
+        });
+
+        // Check if the response contains a function call
+        const functionCall = openAIResponse.choices[0].message.function_call;
+        if (functionCall && functionCall.name === "get_user_transactions") {
+            try {
+                // Parse the function arguments
+                const args = JSON.parse(functionCall.arguments);
+                
+                // Fetch transactions using the existing logic
+                const constraints = [
+                    {"key": "Created By", "constraint_type": "equals", "value": args.userId},
+                    {"key": "is_pending?", "constraint_type": "equals", "value": "false"}
+                ];
+
+                const bubbleURL = `${process.env.BUBBLE_API_URL}/transactions?constraints=${encodeURIComponent(JSON.stringify(constraints))}&sort_field=Date&sort_direction=descending&limit=100`;
+                
+                const response = await axios.get(bubbleURL, {
+                    headers: { 'Authorization': `Bearer ${process.env.BUBBLE_API_KEY}` }
                 });
 
-                cursor = response.data?.response?.cursor;
-                hasMore = response.data?.response?.remaining > 0;
-                pageCount++;
-            }
-
-            // If no transactions found, try with date range
-            if (allTransactions.size === 0) {
-                console.log("⚠️ No transactions found using Month/Year fields, trying date range...");
-
-                cursor = null;
-                hasMore = true;
-                pageCount = 0;
-
-                while (hasMore && pageCount < MAX_PAGES) {
-                    const cursorParam = cursor ? `&cursor=${cursor}` : '';
-                    const bubbleURL = `${process.env.BUBBLE_API_URL}/transactions?constraints=${encodeURIComponent(JSON.stringify(dateConstraints))}&sort_field=Date&sort_direction=descending&limit=${TRANSACTIONS_PER_PAGE}${cursorParam}`;
-
-                    const response = await axios.get(bubbleURL, {
-                        headers: { 'Authorization': `Bearer ${process.env.BUBBLE_API_KEY}` },
-                        timeout: 15000
-                    });
-
-                    const pageTransactions = response.data?.response?.results || [];
+                const transactions = response.data?.response?.results || [];
+                
+                // Format transactions for display
+                const formattedTransactions = transactions.map(t => {
+                    const transactionDate = new Date(t.Date);
+                    const isPending = t['is_pending?'] === 'true';
+                    const isFutureDate = transactionDate > new Date();
                     
-                    pageTransactions.forEach(t => {
-                        const transactionKey = `${t.Date}_${t.Amount}_${t.Description}_${t.Bank || ''}`;
-                        if (!allTransactions.has(transactionKey)) {
-                            allTransactions.set(transactionKey, t);
-                            console.log(`📅 New transaction (Date range search):`, {
-                                date: t.Date,
-                                month: new Date(t.Date).toLocaleString('en-US', { month: 'short' }),
-                                year: new Date(t.Date).getFullYear(),
-                                amount: t.Amount,
-                                description: t.Description
-                            });
-                        }
-                    });
-
-                    cursor = response.data?.response?.cursor;
-                    hasMore = response.data?.response?.remaining > 0;
-                    pageCount++;
-                }
-            }
-
-            if (allTransactions.size === 0) {
-                return res.json(formatResponse("function", false, "No transactions found for the specified date range."));
-            }
-
-            // Convert Map back to array and sort
-            const sortedTransactions = Array.from(allTransactions.values()).sort((a, b) => {
-                return new Date(b.Date) - new Date(a.Date);
-            });
-
-            // Take the 50 most recent transactions for GPT-4
-            const recentTransactions = sortedTransactions.slice(0, 50);
-
-            // Format transactions for GPT-4
-            const formattedTransactions = recentTransactions.map(t => {
-                const transactionDate = new Date(t.Date);
-                const isPending = t['is_pending?'] === 'true';
-                const isFutureDate = transactionDate > currentDate;
-                
-                return {
-                    date: transactionDate.toLocaleString(),
-                    amount: parseFloat(t.Amount).toFixed(2),
-                    bank: t.Bank || '',
-                    description: t.Description || 'No description',
-                    category: t['Category (Old)'] || t.Category || 'Uncategorized',
-                    is_pending: isPending || isFutureDate ? 'true' : 'false',
-                    month: transactionDate.toLocaleString('en-US', { month: 'short' }),
-                    year: transactionDate.getFullYear(),
-                    transaction_status: isPending ? 'pending' : 
-                                      isFutureDate ? 'future' : 
-                                      'completed'
-                };
-            });
-
-            // Analyze monthly distribution with status tracking
-            const monthlyStats = sortedTransactions.reduce((acc, t) => {
-                const date = new Date(t.Date);
-                const monthKey = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
-                const isPending = t['is_pending?'] === 'true';
-                const isFutureDate = date > currentDate;
-                const status = isPending ? 'pending' : isFutureDate ? 'future' : 'completed';
-                
-                if (!acc[monthKey]) {
-                    acc[monthKey] = {
-                        count: 0,
-                        total: 0,
-                        transactions: [],
-                        status_breakdown: {
-                            pending: 0,
-                            future: 0,
-                            completed: 0
-                        }
-                    };
-                }
-                acc[monthKey].count++;
-                acc[monthKey].total += parseFloat(t.Amount) || 0;
-                acc[monthKey].status_breakdown[status]++;
-                if (acc[monthKey].transactions.length < 3) {
-                    acc[monthKey].transactions.push({
-                        date: t.Date,
+                    return {
+                        date: transactionDate.toLocaleString(),
                         amount: t.Amount,
                         description: t.Description,
-                        status: status
-                    });
-                }
-                return acc;
-            }, {});
+                        bank: t.Bank || "",
+                        account: t.Account,
+                        category: t.Category || "Uncategorized",
+                        isPending: isPending || isFutureDate ? 'true' : 'false',
+                        month: transactionDate.toLocaleString('en-US', { month: 'short' }),
+                        year: transactionDate.getFullYear(),
+                        transaction_status: isPending ? 'pending' : 
+                                          isFutureDate ? 'future' : 
+                                          'completed'
+                    };
+                });
 
-            // Send to OpenAI for analysis
-            const openAIResponse = await client.chat.completions.create({
-                model: "gpt-4",
-                messages: [
-                    {
-                        role: "system",
-                        content: "You are the Bountisphere Money Coach. Analyze the transactions and provide insights about spending patterns, focusing on the most recent transactions first."
-                    },
-                    {
-                        role: "user",
-                        content: `Please analyze these transactions and answer: ${input}\n\nTransactions: ${JSON.stringify(formattedTransactions, null, 2)}`
-                    }
-                ],
-                temperature: 0.7
-            });
+                // Get analysis of the transactions
+                const analysisResponse = await client.chat.completions.create({
+                    model: "gpt-4",
+                    messages: [
+                        {
+                            role: "system",
+                            content: "You are the Bountisphere Money Coach. Analyze the transactions and provide insights about spending patterns."
+                        },
+                        {
+                            role: "user",
+                            content: `Please analyze these transactions and answer: ${input}\n\nTransactions: ${JSON.stringify(formattedTransactions, null, 2)}`
+                        }
+                    ],
+                    temperature: 0.7
+                });
 
-            // Process the response using our utility
-            const formattedResponse = processOpenAIResponse(openAIResponse);
-            
-            // Add transactions and debug info
-            formattedResponse.transactions = formattedTransactions;
-            formattedResponse.debug = {
-                totalTransactions: allTransactions.size,
-                recentTransactionsUsed: formattedTransactions.length,
-                paginationInfo: {
-                    pagesRetrieved: pageCount,
-                    hasMorePages: hasMore,
-                    transactionsPerPage: TRANSACTIONS_PER_PAGE
-                },
-                dateRange: {
-                    requestedRange: {
-                        start: effectiveStartDate.toISOString(),
-                        end: effectiveEndDate.toISOString(),
-                        isDefault: !startDate && !endDate
-                    },
-                    actual: {
-                        earliest: sortedTransactions[sortedTransactions.length - 1]?.Date,
-                        latest: sortedTransactions[0]?.Date,
-                        currentServerTime: new Date().toISOString()
-                    }
-                },
-                monthlyStats,
-                searchResults: {
-                    byMonthField: Array.from(allTransactions.values()).filter(t => 
-                        t.Month === effectiveStartDate.toLocaleString('en-US', { month: 'short' }) && 
-                        t.Year === effectiveStartDate.getFullYear().toString()
-                    ).length,
-                    byDateRange: Array.from(allTransactions.values()).filter(t => {
-                        const date = new Date(t.Date);
-                        return date.getMonth() === effectiveStartDate.getMonth() && 
-                               date.getFullYear() === effectiveStartDate.getFullYear();
-                    }).length
-                },
-                query: {
-                    monthYearConstraints,
-                    dateConstraints,
-                    userId
-                }
-            };
+                // Format response in the structure that matches web search responses
+                return res.json({
+                    output: [{
+                        type: "text",
+                        text: analysisResponse.choices[0].message.content,
+                        transactions: formattedTransactions,
+                        summary: {
+                            totalTransactions: transactions.length,
+                            dateRange: transactions.length > 0 ? {
+                                earliest: transactions[transactions.length - 1].Date,
+                                latest: transactions[0].Date
+                            } : null,
+                            totalAmount: transactions.reduce((sum, t) => sum + parseFloat(t.Amount), 0)
+                        }
+                    }]
+                });
 
-            return res.json(formattedResponse);
-
-        } catch (error) {
-            console.error("❌ Error fetching transactions:", error);
-            return res.json(formatResponse("function", false, "Error fetching transaction data. Please try again later."));
+            } catch (error) {
+                console.error("❌ Error fetching transactions:", error);
+                return res.json({
+                    output: [{
+                        type: "text",
+                        text: "Error fetching transaction data. Please try again later."
+                    }]
+                });
+            }
         }
+
+        // If no function call, return the regular response in the same format as web search
+        return res.json({
+            output: [{
+                type: "text",
+                text: openAIResponse.choices[0].message.content
+            }]
+        });
+
     } catch (error) {
         console.error("❌ Error in /assistant endpoint:", error);
-        return res.json(formatResponse("function", false, "An error occurred while processing your request. Please try again later."));
+        return res.json({
+            output: [{
+                type: "text",
+                text: "An error occurred while processing your request. Please try again later."
+            }]
+        });
     }
 });
 
