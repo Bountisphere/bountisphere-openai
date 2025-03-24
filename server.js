@@ -76,88 +76,74 @@ app.post('/transactions', async (req, res) => {
 
         const bubbleURL = `${process.env.BUBBLE_API_URL}/transactions?constraints=${encodeURIComponent(JSON.stringify(constraints))}&sort_field=Date&sort_direction=descending&limit=100`;
 
-        console.log("🌍 Fetching transactions from:", bubbleURL);
-        console.log("📅 Date range:", { ninetyDaysAgo, today });
-        console.log("🔍 Constraints:", JSON.stringify(constraints, null, 2));
-
         try {
-            // Log the full request details
-            console.log("📤 Request details:", {
-                url: bubbleURL,
-                headers: {
-                    'Authorization': 'Bearer [REDACTED]'
-                }
-            });
-
             const response = await axios.get(bubbleURL, {
                 headers: { 'Authorization': `Bearer ${process.env.BUBBLE_API_KEY}` }
             });
 
-            // Log the full response
-            console.log("📥 Response status:", response.status);
-            console.log("📥 Response headers:", response.headers);
-            console.log("📥 Response data:", JSON.stringify(response.data, null, 2));
-
             const transactions = response.data?.response?.results || [];
             
-            // Add debug information
+            // Transform transactions to include essential fields plus additional useful information
+            const transformedTransactions = transactions.map(tx => {
+                const transactionDate = new Date(tx.Date);
+                const isPending = tx['is_pending?'] === 'true';
+                const isFutureDate = transactionDate > new Date();
+                
+                return {
+                    id: tx.Transaction_ID,
+                    date: transactionDate.toLocaleString(),
+                    amount: tx.Amount,
+                    description: tx.Description,
+                    merchant: tx.Merchant_Name,
+                    category: tx.Category_Details,
+                    categoryDescription: tx.Category_Description,
+                    personalFinanceCategory: tx.Personal_Finance_Category,
+                    bank: tx.Bank,
+                    account: tx.Account,
+                    isPending: isPending || isFutureDate ? 'true' : 'false',
+                    month: transactionDate.toLocaleString('en-US', { month: 'short' }),
+                    year: transactionDate.getFullYear(),
+                    transaction_status: isPending ? 'pending' : 
+                                      isFutureDate ? 'future' : 
+                                      'completed'
+                };
+            });
+
+            // Add essential debug information
             const debugInfo = {
                 totalTransactions: transactions.length,
                 dateRange: transactions.length > 0 ? {
                     earliest: transactions[transactions.length - 1].Date,
                     latest: transactions[0].Date,
-                    currentServerTime: new Date().toISOString(),
-                    requestedDateRange: {
-                        startDate: ninetyDaysAgo,
-                        endDate: today
-                    }
+                    currentServerTime: new Date().toISOString()
                 } : null,
-                query: {
-                    url: bubbleURL,
-                    constraints,
-                    userId,
-                    rawResponse: response.data,
-                    pagination: {
-                        cursor: response.data?.response?.cursor,
-                        remaining: response.data?.response?.remaining
-                    }
-                },
-                userInfo: transactions.length > 0 ? {
-                    providedUserId: userId,
-                    transactionCreatedBy: transactions[0]['Created By'],
-                    userEmail: transactions[0].User_Email || null,
-                    firstTransactionDetails: {
-                        date: transactions[0].Date,
-                        createdDate: transactions[0].Created_Date,
-                        modifiedDate: transactions[0].Modified_Date
-                    }
-                } : null
+                pagination: {
+                    cursor: response.data?.response?.cursor,
+                    remaining: response.data?.response?.remaining
+                }
             };
 
-            console.log(`✅ Retrieved ${transactions.length} transactions`);
-            console.log("📊 Full debug info:", JSON.stringify(debugInfo, null, 2));
-            
             // Format the response using our utility
             const formattedResponse = formatResponse("function", true, "Successfully retrieved transactions");
-            formattedResponse.transactions = transactions;
+            formattedResponse.transactions = transformedTransactions;
             formattedResponse.debug = debugInfo;
-            formattedResponse.pagination = {
-                cursor: response.data?.response?.cursor,
-                remaining: response.data?.response?.remaining
+            formattedResponse.pagination = debugInfo.pagination;
+
+            // Add metadata for consistency with web search responses
+            formattedResponse.metadata = {
+                source: "bubble",
+                timestamp: new Date().toISOString(),
+                query: {
+                    userId,
+                    startDate,
+                    endDate
+                }
             };
 
             return res.json(formattedResponse);
 
         } catch (error) {
             console.error("❌ Error fetching transactions:", error.response?.data || error.message);
-            console.error("Full error:", error);
-            console.error("Error response:", error.response?.data);
-            console.error("Error status:", error.response?.status);
-            console.error("Error headers:", error.response?.headers);
-            console.error("Request URL:", error.config?.url);
-            console.error("Request method:", error.config?.method);
-            console.error("Request headers:", error.config?.headers);
-            
             return res.json(formatResponse("function", false, "Error fetching transactions. Please try again later."));
         }
     } catch (error) {
