@@ -530,18 +530,6 @@ app.post('/assistant', async (req, res) => {
                     instructions: "You are the Bountisphere Money Coach—a friendly, supportive, and expert financial assistant. If the user's question involves transaction details, call the 'get_user_transactions' function with the userId provided in the prompt. For general financial advice, you can use web search to find current information and the vector store to access documentation.",
                     output: [
                         {
-                            type: "message",
-                            id: `msg_${Date.now().toString(16)}${Math.random().toString(16).substring(2)}`,
-                            status: "completed",
-                            role: "assistant",
-                            content: [
-                                {
-                                    type: "output_text",
-                                    text: finalResponse.choices[0].message.content
-                                }
-                            ]
-                        },
-                        {
                             type: "function_call",
                             id: `fc_${Date.now().toString(16)}${Math.random().toString(16).substring(2)}`,
                             call_id: `call_${Math.random().toString(36).substring(2)}`,
@@ -663,20 +651,7 @@ app.post('/assistant', async (req, res) => {
                 error: null,
                 incomplete_details: null,
                 instructions: "You are the Bountisphere Money Coach—a friendly, supportive, and expert financial assistant. If the user's question involves transaction details, call the 'get_user_transactions' function with the userId provided in the prompt. For general financial advice, you can use web search to find current information and the vector store to access documentation.",
-                output: [
-                    {
-                        type: "message",
-                        id: `msg_${Date.now().toString(16)}${Math.random().toString(16).substring(2)}`,
-                        status: "completed",
-                        role: "assistant",
-                        content: [
-                            {
-                                type: "output_text",
-                                text: openAIResponse.choices[0].message.content
-                            }
-                        ]
-                    }
-                ],
+                output: [],
                 parallel_tool_calls: true,
                 text: {
                     format: { type: "text" },
