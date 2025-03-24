@@ -378,8 +378,7 @@ app.post('/assistant', async (req, res) => {
                 
                 // Fetch transactions using the existing logic
                 const constraints = [
-                    {"key": "Created By", "constraint_type": "equals", "value": args.userId},
-                    {"key": "is_pending?", "constraint_type": "equals", "value": "false"}
+                    {"key": "Created By", "constraint_type": "equals", "value": args.userId}
                 ];
 
                 const bubbleURL = `${process.env.BUBBLE_API_URL}/transactions?constraints=${encodeURIComponent(JSON.stringify(constraints))}&sort_field=Date&sort_direction=descending&limit=100`;
@@ -412,37 +411,50 @@ app.post('/assistant', async (req, res) => {
                     };
                 });
 
+                // Create a message array for the second OpenAI call
+                const messages = [
+                    {
+                        role: "system",
+                        content: "You are the Bountisphere Money Coach. Analyze the transactions and provide insights about spending patterns."
+                    },
+                    {
+                        role: "user",
+                        content: input
+                    },
+                    {
+                        role: "function",
+                        name: "get_user_transactions",
+                        content: JSON.stringify(formattedTransactions)
+                    }
+                ];
+
                 // Get analysis of the transactions
                 const analysisResponse = await client.chat.completions.create({
                     model: "gpt-4",
-                    messages: [
-                        {
-                            role: "system",
-                            content: "You are the Bountisphere Money Coach. Analyze the transactions and provide insights about spending patterns."
-                        },
-                        {
-                            role: "user",
-                            content: `Please analyze these transactions and answer: ${input}\n\nTransactions: ${JSON.stringify(formattedTransactions, null, 2)}`
-                        }
-                    ],
+                    messages: messages,
                     temperature: 0.7
                 });
 
-                // Return the function call with analysis in raw_body_text
+                // Return in the format OpenAI expects
                 return res.json({
-                    output: [{
-                        type: "function_call",
-                        id: functionCall.id,
-                        call_id: functionCall.call_id,
-                        name: "get_user_transactions",
-                        arguments: functionCall.arguments,
-                        status: "completed",
-                        raw_body_text: analysisResponse.choices[0].message.content
-                    }]
+                    output: [
+                        {
+                            type: "function_call",
+                            id: `fc_${Date.now()}`,
+                            call_id: `call_${Date.now()}`,
+                            name: "get_user_transactions",
+                            arguments: functionCall.arguments
+                        },
+                        {
+                            type: "function_call_output",
+                            call_id: `call_${Date.now()}`,
+                            output: analysisResponse.choices[0].message.content
+                        }
+                    ]
                 });
 
             } catch (error) {
-                console.error("❌ Error fetching transactions:", error);
+                console.error("❌ Error fetching transactions:", error.response?.data || error.message);
                 return res.json({
                     output: [{
                         type: "text",
@@ -461,7 +473,7 @@ app.post('/assistant', async (req, res) => {
         });
 
     } catch (error) {
-        console.error("❌ Error in /assistant endpoint:", error);
+        console.error("❌ Error in /assistant endpoint:", error.response?.data || error.message);
         return res.json({
             output: [{
                 type: "text",
