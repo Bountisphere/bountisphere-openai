@@ -19,12 +19,30 @@ const client = new OpenAI({
 const FALLBACK_MESSAGE = "I couldn't find an up-to-date answer for that, but you might try checking a financial news site or your brokerage app for the latest details.";
 
 const formatResponse = (toolSource, success, content, fallback = false) => {
-    return {
+    const baseResponse = {
         source: toolSource,
         success,
         content,
-        fallback
+        fallback,
+        timestamp: new Date().toISOString()
     };
+
+    // Add metadata based on response type
+    if (toolSource === "web") {
+        baseResponse.metadata = {
+            type: "web_search",
+            citations: content.annotations || [],
+            query: content.query || null
+        };
+    } else if (toolSource === "function") {
+        baseResponse.metadata = {
+            type: "function_call",
+            function_name: content.function_name || null,
+            parameters: content.parameters || null
+        };
+    }
+
+    return baseResponse;
 };
 
 const isVagueResponse = (response) => {
@@ -40,9 +58,19 @@ const isVagueResponse = (response) => {
 
 const processOpenAIResponse = (response, toolSource = "function") => {
     const content = response.choices[0].message.content;
+    
+    // Handle different response types
+    if (toolSource === "web") {
+        return formatResponse(toolSource, true, {
+            text: content,
+            annotations: response.choices[0].message.annotations || []
+        });
+    }
+
     if (isVagueResponse(content)) {
         return formatResponse(toolSource, false, FALLBACK_MESSAGE, true);
     }
+
     return formatResponse(toolSource, true, content);
 };
 
@@ -89,17 +117,31 @@ app.post('/transactions', async (req, res) => {
                 const isPending = tx['is_pending?'] === 'true';
                 const isFutureDate = transactionDate > new Date();
                 
+                // Determine category based on description and other fields
+                let category = "Uncategorized";
+                if (tx.Description?.toLowerCase().includes("amazon")) {
+                    category = "Shops";
+                } else if (tx.Description?.toLowerCase().includes("insurance") || 
+                          tx.Description?.toLowerCase().includes("geico") ||
+                          tx.Description?.toLowerCase().includes("hanover")) {
+                    category = "Service, Insurance";
+                } else if (tx.Description?.toLowerCase().includes("payment") ||
+                          tx.Description?.toLowerCase().includes("transfer")) {
+                    category = "Transfer, Debit";
+                } else if (tx.Description?.toLowerCase().includes("service") ||
+                          tx.Description?.toLowerCase().includes("subscription")) {
+                    category = "Service";
+                } else if (tx.Description?.toLowerCase().includes("credit")) {
+                    category = "Credit";
+                }
+                
                 return {
-                    id: tx.Transaction_ID,
                     date: transactionDate.toLocaleString(),
                     amount: tx.Amount,
                     description: tx.Description,
-                    merchant: tx.Merchant_Name,
-                    category: tx.Category_Details,
-                    categoryDescription: tx.Category_Description,
-                    personalFinanceCategory: tx.Personal_Finance_Category,
-                    bank: tx.Bank,
+                    bank: tx.Bank || "",
                     account: tx.Account,
+                    category: category,
                     isPending: isPending || isFutureDate ? 'true' : 'false',
                     month: transactionDate.toLocaleString('en-US', { month: 'short' }),
                     year: transactionDate.getFullYear(),
