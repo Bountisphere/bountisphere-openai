@@ -287,7 +287,7 @@ app.post('/assistant', async (req, res) => {
             messages: [
                 {
                     role: "system",
-                    content: "You are the Bountisphere Money Coach. If the user asks about their transactions, spending, or financial activity, use the get_user_transactions function. For general financial advice, you can use web search to find current information and the vector store to access documentation."
+                    content: "You are the Bountisphere Money Coach. For questions about market data, stocks, or general financial information, use web_search_preview. For questions about the user's personal transactions or spending, use get_user_transactions. Only use file_search when specifically asked about documentation or internal policies."
                 },
                 {
                     role: "user",
@@ -311,6 +311,26 @@ app.post('/assistant', async (req, res) => {
                             }
                         }
                     }
+                }
+            ],
+            tools: [
+                {
+                    type: "web_search_preview",
+                    search_context_size: "medium",
+                    user_location: {
+                        type: "approximate",
+                        country: "US"
+                    }
+                },
+                {
+                    type: "file_search",
+                    filters: null,
+                    max_num_results: 20,
+                    ranking_options: {
+                        ranker: "auto",
+                        score_threshold: 0
+                    },
+                    vector_store_ids: ["vs_JScHftFeKAv35y4QHPz9QwMb"]
                 }
             ],
             temperature: 0.7
