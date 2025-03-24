@@ -325,7 +325,6 @@ app.post('/assistant', async (req, res) => {
         const userId = req.query.userId?.trim();
 
         console.log("📥 Received request with userId:", userId);
-        console.log("📅 Date range requested:", { startDate, endDate });
 
         if (!userId || !input) {
             return res.json({
@@ -336,19 +335,21 @@ app.post('/assistant', async (req, res) => {
             });
         }
 
-        // Get initial response from OpenAI
+        // Step 1: Initial call to OpenAI
+        const messages = [
+            {
+                role: "system",
+                content: "You are the Bountisphere Money Coach. Analyze the transactions and provide insights about spending patterns, focusing on the most recent transactions first."
+            },
+            {
+                role: "user",
+                content: input
+            }
+        ];
+
         const openAIResponse = await client.chat.completions.create({
             model: "gpt-4",
-            messages: [
-                {
-                    role: "system",
-                    content: "You are the Bountisphere Money Coach. Analyze the transactions and provide insights about spending patterns, focusing on the most recent transactions first."
-                },
-                {
-                    role: "user",
-                    content: input
-                }
-            ],
+            messages: messages,
             functions: [
                 {
                     name: "get_user_transactions",
@@ -369,16 +370,13 @@ app.post('/assistant', async (req, res) => {
             temperature: 0.7
         });
 
-        // Check if the response contains a function call
+        // Step 2: Check if OpenAI wants to call a function
         const functionCall = openAIResponse.choices[0].message.function_call;
         if (functionCall && functionCall.name === "get_user_transactions") {
             try {
-                // Parse the function arguments
-                const args = JSON.parse(functionCall.arguments);
-                
-                // Fetch transactions using the existing logic
+                // Step 3: Execute the function
                 const constraints = [
-                    {"key": "Created By", "constraint_type": "equals", "value": args.userId}
+                    {"key": "Created By", "constraint_type": "equals", "value": userId}
                 ];
 
                 const bubbleURL = `${process.env.BUBBLE_API_URL}/transactions?constraints=${encodeURIComponent(JSON.stringify(constraints))}&sort_field=Date&sort_direction=descending&limit=100`;
@@ -411,50 +409,39 @@ app.post('/assistant', async (req, res) => {
                     };
                 });
 
-                // Create a message array for the second OpenAI call
-                const messages = [
-                    {
-                        role: "system",
-                        content: "You are the Bountisphere Money Coach. Analyze the transactions and provide insights about spending patterns."
-                    },
-                    {
-                        role: "user",
-                        content: input
-                    },
-                    {
-                        role: "function",
+                // Step 4: Add the function call and result to messages
+                messages.push({
+                    role: "assistant",
+                    content: null,
+                    function_call: {
                         name: "get_user_transactions",
-                        content: JSON.stringify(formattedTransactions)
+                        arguments: JSON.stringify({ userId })
                     }
-                ];
+                });
 
-                // Get analysis of the transactions
-                const analysisResponse = await client.chat.completions.create({
+                messages.push({
+                    role: "function",
+                    name: "get_user_transactions",
+                    content: JSON.stringify(formattedTransactions)
+                });
+
+                // Step 5: Get the final response from OpenAI
+                const finalResponse = await client.chat.completions.create({
                     model: "gpt-4",
                     messages: messages,
                     temperature: 0.7
                 });
 
-                // Return in the format OpenAI expects
+                // Step 6: Return the response in the format Bubble expects
                 return res.json({
-                    output: [
-                        {
-                            type: "function_call",
-                            id: `fc_${Date.now()}`,
-                            call_id: `call_${Date.now()}`,
-                            name: "get_user_transactions",
-                            arguments: functionCall.arguments
-                        },
-                        {
-                            type: "function_call_output",
-                            call_id: `call_${Date.now()}`,
-                            output: analysisResponse.choices[0].message.content
-                        }
-                    ]
+                    output: [{
+                        type: "text",
+                        raw_body_text: finalResponse.choices[0].message.content
+                    }]
                 });
 
             } catch (error) {
-                console.error("❌ Error fetching transactions:", error.response?.data || error.message);
+                console.error("❌ Error:", error.response?.data || error.message);
                 return res.json({
                     output: [{
                         type: "text",
