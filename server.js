@@ -59,7 +59,7 @@ app.post('/transactions', async (req, res) => {
     try {
         const { userId, startDate, endDate } = req.body;
         if (!userId) {
-            return res.status(400).json({ error: 'User ID is required' });
+            return res.json(formatResponse("function", false, "User ID is required"));
         }
 
         // Build constraints array - start with just the user ID
@@ -137,15 +137,16 @@ app.post('/transactions', async (req, res) => {
             console.log(`✅ Retrieved ${transactions.length} transactions`);
             console.log("📊 Full debug info:", JSON.stringify(debugInfo, null, 2));
             
-            res.json({
-                success: true,
-                transactions,
-                debug: debugInfo,
-                pagination: {
-                    cursor: response.data?.response?.cursor,
-                    remaining: response.data?.response?.remaining
-                }
-            });
+            // Format the response using our utility
+            const formattedResponse = formatResponse("function", true, "Successfully retrieved transactions");
+            formattedResponse.transactions = transactions;
+            formattedResponse.debug = debugInfo;
+            formattedResponse.pagination = {
+                cursor: response.data?.response?.cursor,
+                remaining: response.data?.response?.remaining
+            };
+
+            return res.json(formattedResponse);
 
         } catch (error) {
             console.error("❌ Error fetching transactions:", error.response?.data || error.message);
@@ -157,26 +158,11 @@ app.post('/transactions', async (req, res) => {
             console.error("Request method:", error.config?.method);
             console.error("Request headers:", error.config?.headers);
             
-            res.status(500).json({ 
-                error: 'Internal server error', 
-                details: error.message,
-                url: error.config?.url || 'URL not available',
-                response: error.response?.data,
-                status: error.response?.status,
-                requestDetails: {
-                    method: error.config?.method,
-                    headers: error.config?.headers ? Object.keys(error.config.headers) : null
-                }
-            });
+            return res.json(formatResponse("function", false, "Error fetching transactions. Please try again later."));
         }
     } catch (error) {
-        console.error("❌ Error fetching transactions:", error.response?.data || error.message);
-        console.error("Full error:", error);
-        res.status(500).json({ 
-            error: 'Internal server error', 
-            details: error.message,
-            url: error.config?.url || 'URL not available'
-        });
+        console.error("❌ Error in /transactions endpoint:", error);
+        return res.json(formatResponse("function", false, "An error occurred while processing your request. Please try again later."));
     }
 });
 
@@ -261,50 +247,15 @@ app.post('/ask-question', async (req, res) => {
 
         console.log("🌍 Fetching data from Bubble for question:", question);
 
-        try {
-            const dataResponse = await axios.get(bubbleURL, {
-                headers: { 'Authorization': `Bearer ${process.env.BUBBLE_API_KEY}` }
-            });
+        const dataResponse = await axios.get(bubbleURL, {
+            headers: { 'Authorization': `Bearer ${process.env.BUBBLE_API_KEY}` }
+        });
 
-            const data = dataResponse.data?.response?.results || [];
+        const data = dataResponse.data?.response?.results || [];
 
-            if (data.length === 0) {
-                return res.json(formatResponse("function", false, "No data found to answer your question."));
-            }
-
-            // 🔥 Step 2: Send Question and Data to OpenAI
-            const openAIResponse = await client.chat.completions.create({
-                model: process.env.OPENAI_MODEL || 'gpt-4',
-                messages: [
-                    { 
-                        role: "system", 
-                        content: "You are a helpful assistant that analyzes financial data and answers questions about transactions, spending patterns, and financial insights. Provide clear, concise answers based on the available data." 
-                    },
-                    { 
-                        role: "user", 
-                        content: `Here is the user's data and question. Please analyze the data and answer the question: "${question}"\n\nData: ${JSON.stringify(data, null, 2)}` 
-                    }
-                ],
-                temperature: 0.7
-            });
-
-            // Process the response using our utility
-            const formattedResponse = processOpenAIResponse(openAIResponse);
-            
-            // Add debug info
-            formattedResponse.debug = {
-                data_used: data.length,
-                question: question
-            };
-
-            return res.json(formattedResponse);
-
-        } catch (error) {
-            console.error("❌ Error fetching data:", error);
-            return res.json(formatResponse("function", false, "Error fetching data. Please try again later."));
+        if (data.length === 0) {
+            return res.json(formatResponse("function", false, "No data found to answer your question."));
         }
-    } catch (error) {
-        console.error("❌ Error processing question:", error);
 
         // 🔥 Step 2: Send Question and Data to OpenAI
         const openAIResponse = await client.chat.completions.create({
@@ -322,15 +273,20 @@ app.post('/ask-question', async (req, res) => {
             temperature: 0.7
         });
 
-        console.log("✅ OpenAI Response Received");
-        res.json({
-            answer: openAIResponse.choices[0].message.content,
-            data_used: data.length
-        });
+        // Process the response using our utility
+        const formattedResponse = processOpenAIResponse(openAIResponse);
+        
+        // Add debug info
+        formattedResponse.debug = {
+            data_used: data.length,
+            question: question
+        };
+
+        return res.json(formattedResponse);
 
     } catch (error) {
-        console.error("❌ Error processing question:", error.response?.data || error.message);
-        res.status(500).json({ error: 'Internal server error' });
+        console.error("❌ Error processing question:", error);
+        return res.json(formatResponse("function", false, "An error occurred while processing your request. Please try again later."));
     }
 });
 
