@@ -283,34 +283,15 @@ app.post('/assistant', async (req, res) => {
 
         // First, get response from OpenAI
         const openAIResponse = await client.chat.completions.create({
-            model: "gpt-4",
+            model: "gpt-4o-mini",
             messages: [
                 {
                     role: "system",
-                    content: "You are the Bountisphere Money Coach. For questions about market data, stocks, or general financial information, use web_search_preview. For questions about the user's personal transactions or spending, use get_user_transactions. Only use file_search when specifically asked about documentation or internal policies."
+                    content: "You are the Bountisphere Money Coach—a friendly, supportive, and expert financial assistant. If the user's question involves transaction details, call the 'get_user_transactions' function with the userId provided in the prompt. For general financial advice, you can use web search to find current information and the vector store to access documentation."
                 },
                 {
                     role: "user",
                     content: input
-                }
-            ],
-            functions: [
-                {
-                    name: "get_user_transactions",
-                    description: "Get the user's transactions when they ask about their spending, transactions, or financial activity",
-                    parameters: {
-                        type: "object",
-                        properties: {
-                            startDate: {
-                                type: "string",
-                                description: "Optional start date in YYYY-MM-DD format"
-                            },
-                            endDate: {
-                                type: "string",
-                                description: "Optional end date in YYYY-MM-DD format"
-                            }
-                        }
-                    }
                 }
             ],
             tools: [
@@ -331,6 +312,24 @@ app.post('/assistant', async (req, res) => {
                         score_threshold: 0
                     },
                     vector_store_ids: ["vs_JScHftFeKAv35y4QHPz9QwMb"]
+                },
+                {
+                    type: "function",
+                    name: "get_user_transactions",
+                    description: "Get the user's transactions when they ask about their spending, transactions, or financial activity",
+                    parameters: {
+                        type: "object",
+                        properties: {
+                            startDate: {
+                                type: "string",
+                                description: "Optional start date in YYYY-MM-DD format"
+                            },
+                            endDate: {
+                                type: "string",
+                                description: "Optional end date in YYYY-MM-DD format"
+                            }
+                        }
+                    }
                 }
             ],
             temperature: 0.7
