@@ -331,7 +331,7 @@ app.post('/assistant', async (req, res) => {
             return res.json({
                 output: [{
                     type: "text",
-                    text: "User ID and input are required."
+                    raw_body_text: "User ID and input are required."
                 }]
             });
         }
@@ -428,20 +428,16 @@ app.post('/assistant', async (req, res) => {
                     temperature: 0.7
                 });
 
-                // Format response in the structure that matches web search responses
+                // Return the function call with analysis in raw_body_text
                 return res.json({
                     output: [{
-                        type: "text",
-                        text: analysisResponse.choices[0].message.content,
-                        transactions: formattedTransactions,
-                        summary: {
-                            totalTransactions: transactions.length,
-                            dateRange: transactions.length > 0 ? {
-                                earliest: transactions[transactions.length - 1].Date,
-                                latest: transactions[0].Date
-                            } : null,
-                            totalAmount: transactions.reduce((sum, t) => sum + parseFloat(t.Amount), 0)
-                        }
+                        type: "function_call",
+                        id: functionCall.id,
+                        call_id: functionCall.call_id,
+                        name: "get_user_transactions",
+                        arguments: functionCall.arguments,
+                        status: "completed",
+                        raw_body_text: analysisResponse.choices[0].message.content
                     }]
                 });
 
@@ -450,17 +446,17 @@ app.post('/assistant', async (req, res) => {
                 return res.json({
                     output: [{
                         type: "text",
-                        text: "Error fetching transaction data. Please try again later."
+                        raw_body_text: "Error fetching transaction data. Please try again later."
                     }]
                 });
             }
         }
 
-        // If no function call, return the regular response in the same format as web search
+        // If no function call, return the regular response
         return res.json({
             output: [{
                 type: "text",
-                text: openAIResponse.choices[0].message.content
+                raw_body_text: openAIResponse.choices[0].message.content
             }]
         });
 
@@ -469,7 +465,7 @@ app.post('/assistant', async (req, res) => {
         return res.json({
             output: [{
                 type: "text",
-                text: "An error occurred while processing your request. Please try again later."
+                raw_body_text: "An error occurred while processing your request. Please try again later."
             }]
         });
     }
