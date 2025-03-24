@@ -455,7 +455,7 @@ app.post('/assistant', async (req, res) => {
                 messages: [
                     {
                         role: "system",
-                        content: "You are the Bountisphere Money Coach. Analyze the transactions and provide insights about spending patterns, focusing on the most recent transactions first."
+                        content: "You are the Bountisphere Money Coach. Analyze the transactions and provide insights about spending patterns, focusing on the most recent transactions first. For market and stock queries, include relevant web search results."
                     },
                     {
                         role: "user",
@@ -465,10 +465,32 @@ app.post('/assistant', async (req, res) => {
                 temperature: 0.7
             });
 
+            // If the query appears to be about market data or stocks, perform a web search
+            const marketRelatedTerms = ['stock', 'market', 'trade', 'price', 'share', 'ETF', 'fund', 'index'];
+            const isMarketQuery = marketRelatedTerms.some(term => input.toLowerCase().includes(term));
+
+            let webSearchResults = null;
+            if (isMarketQuery) {
+                try {
+                    const response = await axios.get(`https://www.alphavantage.co/query`, {
+                        params: {
+                            function: 'GLOBAL_QUOTE',
+                            symbol: input.match(/[A-Z]{1,5}/)?.[0] || '',  // Extract potential stock symbol
+                            apikey: process.env.ALPHA_VANTAGE_API_KEY
+                        }
+                    });
+                    webSearchResults = response.data;
+                } catch (error) {
+                    console.error("Error fetching market data:", error);
+                    webSearchResults = { error: "Unable to fetch market data" };
+                }
+            }
+
             return res.json({
                 success: true,
                 answer: openAIResponse.choices[0].message.content,
                 transactions: formattedTransactions,
+                webSearchResults: webSearchResults,
                 debug: {
                     totalTransactions: allTransactions.size,
                     recentTransactionsUsed: formattedTransactions.length,
