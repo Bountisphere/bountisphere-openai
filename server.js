@@ -377,35 +377,54 @@ app.post('/assistant', async (req, res) => {
         const functionCall = initialResponse.output?.[0];
         if (functionCall?.type === "function_call") {
             try {
-                // Parse the function arguments
-                const args = JSON.parse(functionCall.arguments);
-                
-                // Step 3: Execute the function
+                // Build constraints array - start with just the user ID
                 const constraints = [
-                    {"key": "Created By", "constraint_type": "equals", "value": args.userId}
+                    {"key": "Created By", "constraint_type": "equals", "value": userId}
                 ];
 
+                // Add date constraint to get recent transactions
+                const today = new Date().toISOString().split('T')[0];
+                const ninetyDaysAgo = new Date(Date.now() - (90 * 24 * 60 * 60 * 1000)).toISOString().split('T')[0];
+                constraints.push({"key": "Date", "constraint_type": "greater than", "value": ninetyDaysAgo});
+                constraints.push({"key": "Date", "constraint_type": "less than", "value": today});
+
                 const bubbleURL = `${process.env.BUBBLE_API_URL}/transactions?constraints=${encodeURIComponent(JSON.stringify(constraints))}&sort_field=Date&sort_direction=descending&limit=100`;
-                
+
                 const response = await axios.get(bubbleURL, {
                     headers: { 'Authorization': `Bearer ${process.env.BUBBLE_API_KEY}` }
                 });
 
                 const transactions = response.data?.response?.results || [];
                 
-                // Format transactions for display
-                const formattedTransactions = transactions.map(t => {
-                    const transactionDate = new Date(t.Date);
-                    const isPending = t['is_pending?'] === 'true';
+                // Transform transactions to include essential fields plus additional useful information
+                const transformedTransactions = transactions.map(tx => {
+                    const transactionDate = new Date(tx.Date);
+                    const isPending = tx['is_pending?'] === 'true';
                     const isFutureDate = transactionDate > new Date();
+                    
+                    // Determine category based on description and other fields
+                    let category = "Uncategorized";
+                    if (tx.Description?.toLowerCase().includes("amazon")) {
+                        category = "Shops";
+                    } else if (tx.Description?.toLowerCase().includes("insurance") || 
+                              tx.Description?.toLowerCase().includes("geico") ||
+                              tx.Description?.toLowerCase().includes("hanover")) {
+                        category = "Service, Insurance";
+                    } else if (tx.Description?.toLowerCase().includes("payment") ||
+                              tx.Description?.toLowerCase().includes("transfer")) {
+                        category = "Transfer, Debit";
+                    } else if (tx.Description?.toLowerCase().includes("service") ||
+                              tx.Description?.toLowerCase().includes("subscription")) {
+                        category = "Service";
+                    }
                     
                     return {
                         date: transactionDate.toLocaleString(),
-                        amount: t.Amount,
-                        description: t.Description,
-                        bank: t.Bank || "",
-                        account: t.Account,
-                        category: t.Category || "Uncategorized",
+                        amount: tx.Amount,
+                        description: tx.Description,
+                        bank: tx.Bank || "",
+                        account: tx.Account,
+                        category: category,
                         isPending: isPending || isFutureDate ? 'true' : 'false',
                         month: transactionDate.toLocaleString('en-US', { month: 'short' }),
                         year: transactionDate.getFullYear(),
@@ -438,7 +457,7 @@ app.post('/assistant', async (req, res) => {
                         {
                             type: "function_call_output",
                             call_id: functionCall.call_id,
-                            output: JSON.stringify(formattedTransactions)
+                            output: JSON.stringify(transformedTransactions)
                         }
                     ],
                     tools: [
@@ -477,6 +496,7 @@ app.post('/assistant', async (req, res) => {
                 });
 
             } catch (error) {
+                console.error("❌ Error:", error.response?.data || error.message);
                 return res.json({
                     output: [{
                         type: "text",
@@ -495,6 +515,7 @@ app.post('/assistant', async (req, res) => {
         });
 
     } catch (error) {
+        console.error("❌ Error in /assistant endpoint:", error.response?.data || error.message);
         return res.json({
             output: [{
                 type: "text",
