@@ -335,23 +335,22 @@ app.post('/assistant', async (req, res) => {
             });
         }
 
-        // Step 1: Initial call to OpenAI
-        const messages = [
-            {
-                role: "system",
-                content: "You are the Bountisphere Money Coach. Analyze the transactions and provide insights about spending patterns, focusing on the most recent transactions first."
-            },
-            {
-                role: "user",
-                content: input
-            }
-        ];
-
-        const openAIResponse = await client.chat.completions.create({
-            model: "gpt-4",
-            messages: messages,
-            functions: [
+        // Step 1: Initial call to OpenAI using Responses API
+        const initialResponse = await client.responses.create({
+            model: "gpt-4o-mini-2024-07-18",
+            input: [
                 {
+                    role: "system",
+                    content: "You are the Bountisphere Money Coach. Analyze the transactions and provide insights about spending patterns, focusing on the most recent transactions first."
+                },
+                {
+                    role: "user",
+                    content: input
+                }
+            ],
+            tools: [
+                {
+                    type: "function",
                     name: "get_user_transactions",
                     description: "Fetch a user's transactions from the Bountisphere endpoint for analysis",
                     parameters: {
@@ -363,16 +362,15 @@ app.post('/assistant', async (req, res) => {
                             }
                         },
                         required: ["userId"]
-                    }
+                    },
+                    strict: true
                 }
-            ],
-            function_call: "auto",
-            temperature: 0.7
+            ]
         });
 
-        // Step 2: Check if OpenAI wants to call a function
-        const functionCall = openAIResponse.choices[0].message.function_call;
-        if (functionCall && functionCall.name === "get_user_transactions") {
+        // Step 2: Check if we got a function call
+        const functionCall = initialResponse.output?.[0];
+        if (functionCall?.type === "function_call" && functionCall.name === "get_user_transactions") {
             try {
                 // Step 3: Execute the function
                 const constraints = [
@@ -409,34 +407,39 @@ app.post('/assistant', async (req, res) => {
                     };
                 });
 
-                // Step 4: Add the function call and result to messages
-                messages.push({
-                    role: "assistant",
-                    content: null,
-                    function_call: {
-                        name: "get_user_transactions",
-                        arguments: JSON.stringify({ userId })
-                    }
+                // Step 4: Send the result back to OpenAI
+                const finalResponse = await client.responses.create({
+                    model: "gpt-4o-mini-2024-07-18",
+                    input: [
+                        {
+                            role: "system",
+                            content: "You are the Bountisphere Money Coach. Analyze the transactions and provide insights about spending patterns, focusing on the most recent transactions first."
+                        },
+                        {
+                            role: "user",
+                            content: input
+                        },
+                        {
+                            type: "function_call",
+                            id: functionCall.id,
+                            call_id: functionCall.call_id,
+                            name: functionCall.name,
+                            arguments: functionCall.arguments,
+                            status: "completed"
+                        },
+                        {
+                            type: "function_call_output",
+                            call_id: functionCall.call_id,
+                            output: JSON.stringify(formattedTransactions)
+                        }
+                    ]
                 });
 
-                messages.push({
-                    role: "function",
-                    name: "get_user_transactions",
-                    content: JSON.stringify(formattedTransactions)
-                });
-
-                // Step 5: Get the final response from OpenAI
-                const finalResponse = await client.chat.completions.create({
-                    model: "gpt-4",
-                    messages: messages,
-                    temperature: 0.7
-                });
-
-                // Step 6: Return the response in the format Bubble expects
+                // Step 5: Return the final analysis
                 return res.json({
                     output: [{
                         type: "text",
-                        raw_body_text: finalResponse.choices[0].message.content
+                        raw_body_text: finalResponse.output[0].content
                     }]
                 });
 
@@ -455,7 +458,7 @@ app.post('/assistant', async (req, res) => {
         return res.json({
             output: [{
                 type: "text",
-                raw_body_text: openAIResponse.choices[0].message.content
+                raw_body_text: initialResponse.output[0].content
             }]
         });
 
