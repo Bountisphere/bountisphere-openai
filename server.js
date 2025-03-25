@@ -475,7 +475,46 @@ app.post('/assistant', async (req, res) => {
                             output: JSON.stringify(formattedTransactions)
                         }
                     ],
-                    tools: [],  // No tools needed for final response
+                    tools: [
+                        {
+                            type: "file_search",
+                            filters: null,
+                            max_num_results: 20,
+                            ranking_options: {
+                                ranker: "auto",
+                                score_threshold: 0
+                            },
+                            vector_store_ids: ["vs_JScHftFeKAv35y4QHPz9QwMb"]
+                        },
+                        {
+                            type: "function",
+                            name: "get_user_transactions",
+                            description: "Fetch a user's transactions from the Bountisphere endpoint for analysis",
+                            parameters: {
+                                type: "object",
+                                properties: {
+                                    userId: {
+                                        type: "string",
+                                        description: "The user ID whose transactions we need to fetch"
+                                    }
+                                },
+                                required: ["userId"],
+                                additionalProperties: false
+                            },
+                            strict: true
+                        },
+                        {
+                            type: "web_search_preview",
+                            search_context_size: "medium",
+                            user_location: {
+                                type: "approximate",
+                                city: null,
+                                country: "US",
+                                region: null,
+                                timezone: null
+                            }
+                        }
+                    ],
                     parallel_tool_calls: false,
                     text: {
                         format: {
@@ -484,15 +523,25 @@ app.post('/assistant', async (req, res) => {
                     }
                 });
 
-                console.log("✅ Final OpenAI response received");
+                console.log("✅ Final OpenAI response received:", JSON.stringify(finalResponse, null, 2));
 
                 // Step 5: Return the final analysis
-                return res.json({
-                    output: [{
-                        type: "text",
-                        raw_body_text: finalResponse.output[0].content
-                    }]
-                });
+                if (finalResponse.output?.[0]?.content) {
+                    return res.json({
+                        output: [{
+                            type: "text",
+                            raw_body_text: finalResponse.output[0].content
+                        }]
+                    });
+                } else {
+                    console.log("⚠️ No content in final response:", finalResponse);
+                    return res.json({
+                        output: [{
+                            type: "text",
+                            raw_body_text: "I apologize, but I couldn't generate a proper analysis of your transactions. Please try again."
+                        }]
+                    });
+                }
 
             } catch (error) {
                 console.error("❌ Error in function execution:", {
