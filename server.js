@@ -324,7 +324,10 @@ app.post('/assistant', async (req, res) => {
         const { input } = req.body;
         const userId = req.query.userId?.trim();
 
+        console.log("📥 Received request with userId:", userId);
+
         if (!userId || !input) {
+            console.error("❌ Missing required fields:", { userId: !!userId, input: !!input });
             return res.json({
                 output: [{
                     type: "text",
@@ -333,13 +336,34 @@ app.post('/assistant', async (req, res) => {
             });
         }
 
-        // Step 1: Initial call to OpenAI using Responses API
+        // 🔥 Step 1: Verify user exists in Bubble
+        const userURL = `${process.env.BUBBLE_API_URL}/user?constraints=[{"key":"_id","constraint_type":"equals","value":"${userId}"}]`;
+        console.log("🔍 Verifying user:", userId);
+
+        const userResponse = await axios.get(userURL, {
+            headers: { 'Authorization': `Bearer ${process.env.BUBBLE_API_KEY}` }
+        });
+
+        if (!userResponse.data?.response?.results?.length) {
+            console.error("❌ User not found in Bubble:", userId);
+            return res.json({
+                output: [{
+                    type: "text",
+                    raw_body_text: "User not found. Please check your user ID."
+                }]
+            });
+        }
+
+        console.log("✅ User verified:", userId);
+        const userEmail = userResponse.data.response.results[0].email;
+
+        // Step 2: Initial call to OpenAI using Responses API
         const initialResponse = await client.responses.create({
             model: "gpt-4o-mini-2024-07-18",
             input: [
                 {
                     role: "system",
-                    content: `You are the Bountisphere Money Coach—a friendly, supportive, and expert financial assistant. The user's ID is ${userId}. When analyzing transactions, automatically use this ID to fetch their data. Be supportive and non-judgmental while providing insights about spending patterns and financial habits.`
+                    content: `You are the Bountisphere Money Coach—a friendly, supportive, and expert financial assistant. When analyzing transactions, use the get_user_transactions function to fetch the data. Be supportive and non-judgmental while providing insights about spending patterns and financial habits.`
                 },
                 {
                     role: "user",
@@ -373,77 +397,21 @@ app.post('/assistant', async (req, res) => {
             }
         });
 
-        // Step 2: Check if we got a function call
-        const functionCall = initialResponse.output?.[0];
-        
-        // If we got a text response asking for user ID, automatically make the function call
-        if (functionCall?.type === "text" && functionCall.text?.toLowerCase().includes("user id")) {
-            // Create a synthetic function call
-            functionCall = {
-                type: "function_call",
-                name: "get_user_transactions",
-                arguments: JSON.stringify({ userId })
-            };
-        }
+        console.log("✅ Initial OpenAI response received");
 
+        // Step 3: Check for a function call
+        const functionCall = initialResponse.output?.[0];
         if (functionCall?.type === "function_call") {
             try {
-                // Build constraints array - start with just the user ID
-                const constraints = [
-                    {"key": "Created By", "constraint_type": "equals", "value": userId}
-                ];
+                console.log("🌍 Fetching transactions for user:", userId);
 
-                // Add date constraint to get recent transactions
-                const today = new Date().toISOString().split('T')[0];
-                const ninetyDaysAgo = new Date(Date.now() - (90 * 24 * 60 * 60 * 1000)).toISOString().split('T')[0];
-                constraints.push({"key": "Date", "constraint_type": "greater than", "value": ninetyDaysAgo});
-                constraints.push({"key": "Date", "constraint_type": "less than", "value": today});
+                // Use the /transactions endpoint instead of duplicating code
+                const transactionResponse = await axios.post(
+                    'https://bountisphere-openai-617952217530.us-central1.run.app/transactions',
+                    { userId }
+                );
 
-                const bubbleURL = `${process.env.BUBBLE_API_URL}/transactions?constraints=${encodeURIComponent(JSON.stringify(constraints))}&sort_field=Date&sort_direction=descending&limit=100`;
-
-                const response = await axios.get(bubbleURL, {
-                    headers: { 'Authorization': `Bearer ${process.env.BUBBLE_API_KEY}` }
-                });
-
-                const transactions = response.data?.response?.results || [];
-                
-                // Transform transactions to include essential fields plus additional useful information
-                const transformedTransactions = transactions.map(tx => {
-                    const transactionDate = new Date(tx.Date);
-                    const isPending = tx['is_pending?'] === 'true';
-                    const isFutureDate = transactionDate > new Date();
-                    
-                    // Determine category based on description and other fields
-                    let category = "Uncategorized";
-                    if (tx.Description?.toLowerCase().includes("amazon")) {
-                        category = "Shops";
-                    } else if (tx.Description?.toLowerCase().includes("insurance") || 
-                              tx.Description?.toLowerCase().includes("geico") ||
-                              tx.Description?.toLowerCase().includes("hanover")) {
-                        category = "Service, Insurance";
-                    } else if (tx.Description?.toLowerCase().includes("payment") ||
-                              tx.Description?.toLowerCase().includes("transfer")) {
-                        category = "Transfer, Debit";
-                    } else if (tx.Description?.toLowerCase().includes("service") ||
-                              tx.Description?.toLowerCase().includes("subscription")) {
-                        category = "Service";
-                    }
-                    
-                    return {
-                        date: transactionDate.toLocaleString(),
-                        amount: tx.Amount,
-                        description: tx.Description,
-                        bank: tx.Bank || "",
-                        account: tx.Account,
-                        category: category,
-                        isPending: isPending || isFutureDate ? 'true' : 'false',
-                        month: transactionDate.toLocaleString('en-US', { month: 'short' }),
-                        year: transactionDate.getFullYear(),
-                        transaction_status: isPending ? 'pending' : 
-                                          isFutureDate ? 'future' : 
-                                          'completed'
-                    };
-                });
+                console.log("✅ Transactions retrieved");
 
                 // Step 4: Send the result back to OpenAI
                 const finalResponse = await client.responses.create({
@@ -451,7 +419,7 @@ app.post('/assistant', async (req, res) => {
                     input: [
                         {
                             role: "system",
-                            content: `You are the Bountisphere Money Coach—a friendly, supportive, and expert financial assistant. The user's ID is ${userId}. Be supportive and non-judgmental while providing insights about spending patterns and financial habits.`
+                            content: `You are the Bountisphere Money Coach—a friendly, supportive, and expert financial assistant. Be supportive and non-judgmental while providing insights about spending patterns and financial habits.`
                         },
                         {
                             role: "user",
@@ -459,13 +427,16 @@ app.post('/assistant', async (req, res) => {
                         },
                         {
                             type: "function_call",
-                            name: "get_user_transactions",
+                            id: functionCall.id,
+                            call_id: functionCall.call_id,
+                            name: functionCall.name,
                             arguments: JSON.stringify({ userId }),
                             status: "completed"
                         },
                         {
                             type: "function_call_output",
-                            output: JSON.stringify(transformedTransactions)
+                            call_id: functionCall.call_id,
+                            output: JSON.stringify(transactionResponse.data)
                         }
                     ],
                     tools: [
@@ -492,6 +463,10 @@ app.post('/assistant', async (req, res) => {
                         format: {
                             type: "text"
                         }
+                    },
+                    metadata: {
+                        userId,
+                        userEmail
                     }
                 });
 
