@@ -321,14 +321,10 @@ app.post('/ask-question', async (req, res) => {
 // 🔹 OpenAI Assistant Endpoint
 app.post('/assistant', async (req, res) => {
     try {
-        const { input, startDate, endDate } = req.body;
+        const { input } = req.body;
         const userId = req.query.userId?.trim();
 
-        console.log("📥 Received request with userId:", userId);
-        console.log("📝 Input:", input);
-
         if (!userId || !input) {
-            console.log("❌ Missing required fields:", { userId: !!userId, input: !!input });
             return res.json({
                 output: [{
                     type: "text",
@@ -338,7 +334,6 @@ app.post('/assistant', async (req, res) => {
         }
 
         // Step 1: Initial call to OpenAI using Responses API
-        console.log("🤖 Making initial OpenAI call...");
         const initialResponse = await client.responses.create({
             model: "gpt-4o-mini-2024-07-18",
             input: [
@@ -352,16 +347,6 @@ app.post('/assistant', async (req, res) => {
                 }
             ],
             tools: [
-                {
-                    type: "file_search",
-                    filters: null,
-                    max_num_results: 20,
-                    ranking_options: {
-                        ranker: "auto",
-                        score_threshold: 0
-                    },
-                    vector_store_ids: ["vs_JScHftFeKAv35y4QHPz9QwMb"]
-                },
                 {
                     type: "function",
                     name: "get_user_transactions",
@@ -378,17 +363,6 @@ app.post('/assistant', async (req, res) => {
                         additionalProperties: false
                     },
                     strict: true
-                },
-                {
-                    type: "web_search_preview",
-                    search_context_size: "medium",
-                    user_location: {
-                        type: "approximate",
-                        city: null,
-                        country: "US",
-                        region: null,
-                        timezone: null
-                    }
                 }
             ],
             parallel_tool_calls: false,
@@ -399,17 +373,12 @@ app.post('/assistant', async (req, res) => {
             }
         });
 
-        console.log("✅ Initial OpenAI response received:", JSON.stringify(initialResponse, null, 2));
-
         // Step 2: Check if we got a function call
         const functionCall = initialResponse.output?.[0];
         if (functionCall?.type === "function_call") {
             try {
-                console.log("🔧 Processing function call:", functionCall.name);
-                
                 // Parse the function arguments
                 const args = JSON.parse(functionCall.arguments);
-                console.log("📊 Function arguments:", args);
                 
                 // Step 3: Execute the function
                 const constraints = [
@@ -418,13 +387,11 @@ app.post('/assistant', async (req, res) => {
 
                 const bubbleURL = `${process.env.BUBBLE_API_URL}/transactions?constraints=${encodeURIComponent(JSON.stringify(constraints))}&sort_field=Date&sort_direction=descending&limit=100`;
                 
-                console.log("🌐 Fetching transactions from Bubble...");
                 const response = await axios.get(bubbleURL, {
                     headers: { 'Authorization': `Bearer ${process.env.BUBBLE_API_KEY}` }
                 });
 
                 const transactions = response.data?.response?.results || [];
-                console.log(`📈 Retrieved ${transactions.length} transactions`);
                 
                 // Format transactions for display
                 const formattedTransactions = transactions.map(t => {
@@ -449,7 +416,6 @@ app.post('/assistant', async (req, res) => {
                 });
 
                 // Step 4: Send the result back to OpenAI
-                console.log("🤖 Making final OpenAI call...");
                 const finalResponse = await client.responses.create({
                     model: "gpt-4o-mini-2024-07-18",
                     input: [
@@ -477,16 +443,6 @@ app.post('/assistant', async (req, res) => {
                     ],
                     tools: [
                         {
-                            type: "file_search",
-                            filters: null,
-                            max_num_results: 20,
-                            ranking_options: {
-                                ranker: "auto",
-                                score_threshold: 0
-                            },
-                            vector_store_ids: ["vs_JScHftFeKAv35y4QHPz9QwMb"]
-                        },
-                        {
                             type: "function",
                             name: "get_user_transactions",
                             description: "Fetch a user's transactions from the Bountisphere endpoint for analysis",
@@ -502,17 +458,6 @@ app.post('/assistant', async (req, res) => {
                                 additionalProperties: false
                             },
                             strict: true
-                        },
-                        {
-                            type: "web_search_preview",
-                            search_context_size: "medium",
-                            user_location: {
-                                type: "approximate",
-                                city: null,
-                                country: "US",
-                                region: null,
-                                timezone: null
-                            }
                         }
                     ],
                     parallel_tool_calls: false,
@@ -523,32 +468,15 @@ app.post('/assistant', async (req, res) => {
                     }
                 });
 
-                console.log("✅ Final OpenAI response received:", JSON.stringify(finalResponse, null, 2));
-
                 // Step 5: Return the final analysis
-                if (finalResponse.output?.[0]?.content) {
-                    return res.json({
-                        output: [{
-                            type: "text",
-                            raw_body_text: finalResponse.output[0].content
-                        }]
-                    });
-                } else {
-                    console.log("⚠️ No content in final response:", finalResponse);
-                    return res.json({
-                        output: [{
-                            type: "text",
-                            raw_body_text: "I apologize, but I couldn't generate a proper analysis of your transactions. Please try again."
-                        }]
-                    });
-                }
+                return res.json({
+                    output: [{
+                        type: "text",
+                        raw_body_text: finalResponse.output[0].content || "I apologize, but I couldn't generate a proper analysis of your transactions. Please try again."
+                    }]
+                });
 
             } catch (error) {
-                console.error("❌ Error in function execution:", {
-                    message: error.message,
-                    response: error.response?.data,
-                    stack: error.stack
-                });
                 return res.json({
                     output: [{
                         type: "text",
@@ -559,7 +487,6 @@ app.post('/assistant', async (req, res) => {
         }
 
         // If no function call, return the regular response
-        console.log("ℹ️ No function call needed, returning direct response");
         return res.json({
             output: [{
                 type: "text",
@@ -568,11 +495,6 @@ app.post('/assistant', async (req, res) => {
         });
 
     } catch (error) {
-        console.error("❌ Error in /assistant endpoint:", {
-            message: error.message,
-            response: error.response?.data,
-            stack: error.stack
-        });
         return res.json({
             output: [{
                 type: "text",
