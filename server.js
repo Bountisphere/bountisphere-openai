@@ -335,6 +335,42 @@ app.post('/assistant', async (req, res) => {
             });
         }
 
+        const tools = [{
+            type: "function",
+            name: "get_user_transactions",
+            description: "Fetch a user's transactions from the Bountisphere endpoint for analysis",
+            parameters: {
+                type: "object",
+                properties: {
+                    userId: {
+                        type: "string",
+                        description: "The user ID whose transactions we need to fetch"
+                    },
+                    options: {
+                        type: "object",
+                        properties: {
+                            startDate: {
+                                type: ["string", "null"],
+                                description: "Optional start date for transaction range (YYYY-MM-DD format)"
+                            },
+                            endDate: {
+                                type: ["string", "null"],
+                                description: "Optional end date for transaction range (YYYY-MM-DD format)"
+                            },
+                            limit: {
+                                type: "number",
+                                description: "Maximum number of transactions to return"
+                            }
+                        },
+                        required: ["limit"],
+                        additionalProperties: false
+                    }
+                },
+                required: ["userId", "options"],
+                additionalProperties: false
+            }
+        }];
+
         // Step 1: Initial call to OpenAI using Responses API
         const initialResponse = await client.responses.create({
             model: "gpt-4o-mini-2024-07-18",
@@ -348,36 +384,38 @@ app.post('/assistant', async (req, res) => {
                     content: input
                 }
             ],
-            tools: [
-                {
-                    type: "function",
-                    name: "get_user_transactions",
-                    description: "Fetch a user's transactions from the Bountisphere endpoint for analysis",
-                    parameters: {
-                        type: "object",
-                        properties: {
-                            userId: {
-                                type: "string",
-                                description: "The user ID whose transactions we need to fetch"
-                            }
-                        },
-                        required: ["userId"]
-                    },
-                    strict: true
-                }
-            ]
+            tools
         });
 
         // Step 2: Check if we got a function call
         const functionCall = initialResponse.output?.[0];
-        if (functionCall?.type === "function_call" && functionCall.name === "get_user_transactions") {
+        if (functionCall?.type === "function_call") {
             try {
+                // Parse the function arguments
+                const args = JSON.parse(functionCall.arguments);
+                
                 // Step 3: Execute the function
                 const constraints = [
-                    {"key": "Created By", "constraint_type": "equals", "value": userId}
+                    {"key": "Created By", "constraint_type": "equals", "value": args.userId}
                 ];
 
-                const bubbleURL = `${process.env.BUBBLE_API_URL}/transactions?constraints=${encodeURIComponent(JSON.stringify(constraints))}&sort_field=Date&sort_direction=descending&limit=100`;
+                // Add date constraints if provided
+                if (args.options?.startDate) {
+                    constraints.push({
+                        "key": "Date",
+                        "constraint_type": "greater than",
+                        "value": args.options.startDate
+                    });
+                }
+                if (args.options?.endDate) {
+                    constraints.push({
+                        "key": "Date",
+                        "constraint_type": "less than",
+                        "value": args.options.endDate
+                    });
+                }
+
+                const bubbleURL = `${process.env.BUBBLE_API_URL}/transactions?constraints=${encodeURIComponent(JSON.stringify(constraints))}&sort_field=Date&sort_direction=descending&limit=${args.options?.limit || 100}`;
                 
                 const response = await axios.get(bubbleURL, {
                     headers: { 'Authorization': `Bearer ${process.env.BUBBLE_API_KEY}` }
@@ -430,7 +468,16 @@ app.post('/assistant', async (req, res) => {
                         {
                             type: "function_call_output",
                             call_id: functionCall.call_id,
-                            output: JSON.stringify(formattedTransactions)
+                            output: JSON.stringify({
+                                transactions: formattedTransactions,
+                                metadata: {
+                                    total_count: transactions.length,
+                                    date_range: {
+                                        start: args.options?.startDate || "90 days ago",
+                                        end: args.options?.endDate || "today"
+                                    }
+                                }
+                            })
                         }
                     ]
                 });
