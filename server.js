@@ -339,7 +339,7 @@ app.post('/assistant', async (req, res) => {
             input: [
                 {
                     role: "system",
-                    content: "You are the Bountisphere Money Coach. Analyze the transactions and provide insights about spending patterns, focusing on the most recent transactions first."
+                    content: `You are the Bountisphere Money Coach—a friendly, supportive, and expert financial assistant. The user's ID is ${userId}. When analyzing transactions, automatically use this ID to fetch their data. Be supportive and non-judgmental while providing insights about spending patterns and financial habits.`
                 },
                 {
                     role: "user",
@@ -375,6 +375,17 @@ app.post('/assistant', async (req, res) => {
 
         // Step 2: Check if we got a function call
         const functionCall = initialResponse.output?.[0];
+        
+        // If we got a text response asking for user ID, automatically make the function call
+        if (functionCall?.type === "text" && functionCall.text?.toLowerCase().includes("user id")) {
+            // Create a synthetic function call
+            functionCall = {
+                type: "function_call",
+                name: "get_user_transactions",
+                arguments: JSON.stringify({ userId })
+            };
+        }
+
         if (functionCall?.type === "function_call") {
             try {
                 // Build constraints array - start with just the user ID
@@ -440,7 +451,7 @@ app.post('/assistant', async (req, res) => {
                     input: [
                         {
                             role: "system",
-                            content: "You are the Bountisphere Money Coach. Analyze the transactions and provide insights about spending patterns, focusing on the most recent transactions first."
+                            content: `You are the Bountisphere Money Coach—a friendly, supportive, and expert financial assistant. The user's ID is ${userId}. Be supportive and non-judgmental while providing insights about spending patterns and financial habits.`
                         },
                         {
                             role: "user",
@@ -448,15 +459,12 @@ app.post('/assistant', async (req, res) => {
                         },
                         {
                             type: "function_call",
-                            id: functionCall.id,
-                            call_id: functionCall.call_id,
-                            name: functionCall.name,
-                            arguments: functionCall.arguments,
+                            name: "get_user_transactions",
+                            arguments: JSON.stringify({ userId }),
                             status: "completed"
                         },
                         {
                             type: "function_call_output",
-                            call_id: functionCall.call_id,
                             output: JSON.stringify(transformedTransactions)
                         }
                     ],
