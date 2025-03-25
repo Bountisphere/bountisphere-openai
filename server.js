@@ -384,7 +384,13 @@ app.post('/assistant', async (req, res) => {
                     content: input
                 }
             ],
-            tools
+            tools,
+            parallel_tool_calls: false,
+            text: {
+                format: {
+                    type: "text"
+                }
+            }
         });
 
         // Step 2: Check if we got a function call
@@ -479,7 +485,14 @@ app.post('/assistant', async (req, res) => {
                                 }
                             })
                         }
-                    ]
+                    ],
+                    tools,
+                    parallel_tool_calls: false,
+                    text: {
+                        format: {
+                            type: "text"
+                        }
+                    }
                 });
 
                 // Step 5: Return the final analysis
