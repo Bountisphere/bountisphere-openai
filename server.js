@@ -383,8 +383,7 @@ app.post('/assistant', async (req, res) => {
                                 description: "The user ID whose transactions we need to fetch"
                             }
                         },
-                        required: ["userId"],
-                        additionalProperties: false
+                        required: ["userId"]
                     },
                     strict: true
                 }
@@ -405,7 +404,7 @@ app.post('/assistant', async (req, res) => {
             try {
                 console.log("🌍 Fetching transactions for user:", userId);
 
-                // Use the /transactions endpoint instead of duplicating code
+                // Use the /transactions endpoint
                 const transactionResponse = await axios.post(
                     'https://bountisphere-openai-617952217530.us-central1.run.app/transactions',
                     { userId }
@@ -424,19 +423,6 @@ app.post('/assistant', async (req, res) => {
                         {
                             role: "user",
                             content: input
-                        },
-                        {
-                            type: "function_call",
-                            id: functionCall.id,
-                            call_id: functionCall.call_id,
-                            name: functionCall.name,
-                            arguments: JSON.stringify({ userId }),
-                            status: "completed"
-                        },
-                        {
-                            type: "function_call_output",
-                            call_id: functionCall.call_id,
-                            output: JSON.stringify(transactionResponse.data)
                         }
                     ],
                     tools: [
@@ -452,12 +438,16 @@ app.post('/assistant', async (req, res) => {
                                         description: "The user ID whose transactions we need to fetch"
                                     }
                                 },
-                                required: ["userId"],
-                                additionalProperties: false
+                                required: ["userId"]
                             },
                             strict: true
                         }
                     ],
+                    tool_call_result: {
+                        name: "get_user_transactions",
+                        data: transactionResponse.data
+                    },
+                    previous_response_id: initialResponse.id,
                     parallel_tool_calls: false,
                     text: {
                         format: {
@@ -470,7 +460,7 @@ app.post('/assistant', async (req, res) => {
                     }
                 });
 
-                // Step 5: Return the final analysis
+                // Return the final analysis
                 return res.json({
                     output: [{
                         type: "text",
