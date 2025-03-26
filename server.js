@@ -383,7 +383,8 @@ app.post('/assistant', async (req, res) => {
                                 description: "The user ID whose transactions we need to fetch"
                             }
                         },
-                        required: ["userId"]
+                        required: ["userId"],
+                        additionalProperties: false
                     },
                     strict: true
                 }
@@ -438,7 +439,8 @@ app.post('/assistant', async (req, res) => {
                                         description: "The user ID whose transactions we need to fetch"
                                     }
                                 },
-                                required: ["userId"]
+                                required: ["userId"],
+                                additionalProperties: false
                             },
                             strict: true
                         }
