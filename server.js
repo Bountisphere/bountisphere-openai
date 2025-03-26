@@ -471,8 +471,8 @@ app.post('/assistant', async (req, res) => {
             }, {});
 
             // Send to OpenAI using new Responses API with file search
-            const openAIResponse = await client.responses.create({
-                model: "gpt-4o-mini",
+            const openAIResponse = await client.chat.completions.create({
+                model: "gpt-4",
                 messages: [
                     {
                         role: "system",
@@ -519,10 +519,6 @@ app.post('/assistant', async (req, res) => {
                         }
                     }
                 ],
-                file_search: {
-                    vector_store_id: BOUNTISPHERE_VECTOR_STORE_ID,
-                    max_results: 5
-                },
                 temperature: 0.7
             });
 
@@ -568,8 +564,8 @@ app.post('/assistant', async (req, res) => {
 
             // If we have function results, send them back to OpenAI for a final response
             if (functionResults.length > 0) {
-                const finalResponse = await client.responses.create({
-                    model: "gpt-4o-mini",
+                const finalResponse = await client.chat.completions.create({
+                    model: "gpt-4",
                     messages: [
                         {
                             role: "system",
