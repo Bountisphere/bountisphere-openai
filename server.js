@@ -564,7 +564,7 @@ app.post('/assistant', async (req, res) => {
 
             // If we have function results, send them back to OpenAI for a final response
             if (functionResults.length > 0) {
-                const finalResponse = await client.chat.completions.create({
+                const finalResponseWithResults = await client.chat.completions.create({
                     model: "gpt-4",
                     messages: [
                         {
@@ -578,7 +578,7 @@ app.post('/assistant', async (req, res) => {
                     ],
                     temperature: 0.7
                 });
-                finalResponse = finalResponse.choices[0].message.content;
+                finalResponse = finalResponseWithResults.choices[0].message.content;
             }
 
             return res.json({
