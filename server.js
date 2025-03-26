@@ -1,99 +1,126 @@
 import express from 'express';
 import axios from 'axios';
 import dotenv from 'dotenv';
+import OpenAI from 'openai';
 
 dotenv.config();
 const app = express();
-const PORT = process.env.PORT || 3000;
-
 app.use(express.json());
 
-// Health check route
-app.get('/', (req, res) => {
-  res.send('🚀 Bountisphere OpenAI API is running!');
+// 1. Initialize the OpenAI client
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY,
+  defaultQuery: { 'api-version': '2024-02-15' },
+  defaultHeaders: { 'api-type': 'openai' }
 });
 
-// /get_user_transactions endpoint: Retrieves transactions from Bubble using constraints
-app.post('/get_user_transactions', async (req, res) => {
-  try {
-    const { userId, startDate, endDate } = req.body;
-    if (!userId) {
-      return res.status(400).json({ error: 'User ID is required' });
+// 2. Define a single function (tool) schema for fetching transactions
+const tools = [
+  {
+    "type": "function",
+    "function": {
+      "name": "get_user_transactions",
+      "description": "Fetch a user's transactions from the Bountisphere Bubble API",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "userId": {
+            "type": "string",
+            "description": "The user ID whose transactions we need to fetch"
+          }
+        },
+        "required": ["userId"],
+        "additionalProperties": false
+      },
+      "strict": true
     }
-
-    // Build constraints array
-    let constraints = [
-      { "key": "Created By", "constraint_type": "equals", "value": userId },
-      { "key": "is_pending?", "constraint_type": "equals", "value": "false" }
-    ];
-    if (startDate) {
-      constraints.push({ "key": "Date", "constraint_type": "greater than", "value": startDate });
-    }
-    if (endDate) {
-      constraints.push({ "key": "Date", "constraint_type": "less than", "value": endDate });
-    }
-
-    // Construct the Bubble API URL
-    const bubbleURL = `${process.env.BUBBLE_API_URL}/transactions?constraints=${encodeURIComponent(JSON.stringify(constraints))}&sort_field=Date&sort_direction=descending&limit=100`;
-    console.log("Fetching transactions from:", bubbleURL);
-
-    const response = await axios.get(bubbleURL, {
-      headers: { 'Authorization': `Bearer ${process.env.BUBBLE_API_KEY}` }
-    });
-
-    const transactions = response.data?.response?.results || [];
-    console.log(`✅ Retrieved ${transactions.length} transactions.`);
-    res.json({ success: true, transactions });
-  } catch (error) {
-    console.error("Error in /get_user_transactions endpoint:", error.message);
-    res.status(500).json({ error: 'Internal server error', details: error.message });
   }
+];
+
+// Health check route (optional)
+app.get('/', (req, res) => {
+  res.send('Bountisphere AI server is running!');
 });
 
-// /assistant endpoint: Processes user questions by fetching transaction data and returning a summary
+// 3. Single /assistant endpoint for user queries + function calling
 app.post('/assistant', async (req, res) => {
   try {
-    const { input, userId, startDate, endDate } = req.body;
-    if (!userId || !input) {
-      return res.status(400).json({ error: 'User ID and input are required' });
+    const { input, userId } = req.body;
+    if (!input || !userId) {
+      return res.status(400).json({
+        error: 'Must provide both "input" (the user question) and "userId".'
+      });
     }
 
-    // Fetch transactions using the same logic as in /get_user_transactions
-    let constraints = [
-      { "key": "Created By", "constraint_type": "equals", "value": userId },
-      { "key": "is_pending?", "constraint_type": "equals", "value": "false" }
+    // Step A: Send the user’s question to OpenAI with the function schema
+    const initialMessages = [
+      { role: 'user', content: input }
     ];
-    if (startDate) {
-      constraints.push({ "key": "Date", "constraint_type": "greater than", "value": startDate });
-    }
-    if (endDate) {
-      constraints.push({ "key": "Date", "constraint_type": "less than", "value": endDate });
-    }
-    const bubbleURL = `${process.env.BUBBLE_API_URL}/transactions?constraints=${encodeURIComponent(JSON.stringify(constraints))}&sort_field=Date&sort_direction=descending&limit=100`;
-    console.log("Assistant: Fetching transactions from:", bubbleURL);
 
-    const response = await axios.get(bubbleURL, {
-      headers: { 'Authorization': `Bearer ${process.env.BUBBLE_API_KEY}` }
+    let completion = await openai.chat.completions.create({
+      model: 'gpt-4o-mini',   // Using GPT-4o-mini as requested
+      messages: initialMessages,
+      tools,
+      store: true
     });
 
-    const transactions = response.data?.response?.results || [];
-    console.log(`Assistant: Retrieved ${transactions.length} transactions.`);
+    // Check if the model called the function
+    let toolCalls = completion.choices[0].message.tool_calls || [];
+    // Keep track of the entire conversation
+    let conversationMessages = [...initialMessages, completion.choices[0].message];
 
-    // For now, generate a dummy summary using the last three transactions.
-    // (In production, you might send this data to OpenAI for analysis.)
-    const lastThree = transactions.slice(0, 3);
-    const summary = lastThree.map(tx => {
-      return `${tx.Date} - ${tx.Amount} - ${tx.Description || 'No description'}`;
-    }).join('; ');
+    // Handle any function calls the model made
+    for (const toolCall of toolCalls) {
+      if (toolCall.function.name === 'get_user_transactions') {
+        // 1. Parse the function arguments
+        const args = JSON.parse(toolCall.function.arguments);
+        const realUserId = args.userId || userId;
 
-    const answer = `Based on your query "${input}", your last three transactions are: ${summary}.`;
-    res.json({ success: true, answer, transactions: lastThree });
+        // 2. Fetch transactions from Bubble
+        const constraints = [
+          { "key": "Created By", "constraint_type": "equals", "value": realUserId },
+          { "key": "is_pending?", "constraint_type": "equals", "value": "false" }
+        ];
+        const bubbleURL = `${process.env.BUBBLE_API_URL}/transactions?constraints=${encodeURIComponent(JSON.stringify(constraints))}&sort_field=Date&sort_direction=descending&limit=100`;
+
+        console.log("Fetching transactions from:", bubbleURL);
+        const response = await axios.get(bubbleURL, {
+          headers: { 'Authorization': `Bearer ${process.env.BUBBLE_API_KEY}` }
+        });
+        const transactions = response.data?.response?.results || [];
+
+        // 3. Append a tool message with the fetched transactions
+        conversationMessages.push({
+          role: "tool",
+          tool_call_id: toolCall.id,
+          content: JSON.stringify(transactions)
+        });
+
+        // 4. Call OpenAI again so it can incorporate the transaction data into a final answer
+        completion = await openai.chat.completions.create({
+          model: 'gpt-4o-mini',
+          messages: conversationMessages,
+          tools,
+          store: true
+        });
+        // Add the new response to our conversation
+        conversationMessages.push(completion.choices[0].message);
+      }
+    }
+
+    // Step C: Return the final text answer to Bubble
+    const finalText = completion.choices[0].message.content;
+    return res.json({ success: true, answer: finalText });
+
   } catch (error) {
     console.error("Error in /assistant endpoint:", error.message);
-    res.status(500).json({ error: 'Internal server error', details: error.message });
+    res.status(500).json({
+      error: 'Internal server error',
+      details: error.message
+    });
   }
 });
 
-app.listen(PORT, () => {
-  console.log(`🚀 Server running on port ${PORT}`);
+app.listen(process.env.PORT || 3000, () => {
+  console.log('🚀 Bountisphere AI server running on port', process.env.PORT || 3000);
 });
