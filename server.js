@@ -610,13 +610,13 @@ app.post('/assistant', async (req, res) => {
                     monthlyStats,
                     searchResults: {
                         byMonthField: allTransactions.filter(t => 
-                            t.Month === startDate.toLocaleString('en-US', { month: 'short' }) && 
-                            t.Year === startDate.getFullYear().toString()
+                            t.Month === (startDate ? startDate.toLocaleString('en-US', { month: 'short' }) : 'Mar') && 
+                            t.Year === (startDate ? startDate.getFullYear().toString() : '2025')
                         ).length,
                         byDateRange: allTransactions.filter(t => {
                             const date = new Date(t.Date);
-                            return date.getMonth() === startDate.getMonth() && 
-                                   date.getFullYear() === startDate.getFullYear();
+                            return date.getMonth() === (startDate ? startDate.getMonth() : 2) && 
+                                   date.getFullYear() === (startDate ? startDate.getFullYear() : 2025);
                         }).length
                     },
                     query: {
