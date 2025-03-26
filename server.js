@@ -13,10 +13,16 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 
-// Initialize OpenAI API
+// Initialize OpenAI API with new configuration
 const client = new OpenAI({
-   apiKey: process.env.OPENAI_API_KEY
+    apiKey: process.env.OPENAI_API_KEY,
+    defaultQuery: { 'api-version': '2024-02-15' },
+    defaultHeaders: { 'api-type': 'openai' }
 });
+
+
+// Vector Store ID for Bountisphere documentation
+const BOUNTISPHERE_VECTOR_STORE_ID = 'vs_JScHftFeKAv35y4QHPz9QwMb';
 
 
 // Middleware to parse JSON requests
@@ -306,247 +312,337 @@ app.post('/ask-question', async (req, res) => {
 });
 
 
-// 🔹 OpenAI Assistant Endpoint
+// 🔹 OpenAI Assistant Endpoint with new Responses API
 app.post('/assistant', async (req, res) => {
-   try {
-       const { input } = req.body;
-       const userId = req.query.userId?.trim();
+    try {
+        const { input, startDate, endDate } = req.body;
+        const userId = req.query.userId?.trim();
 
+        console.log("📥 Received request with userId:", userId);
+        console.log("📅 Date range requested:", { startDate, endDate });
 
-       console.log("📥 Received request with userId:", userId);
+        if (!userId || !input) {
+            return res.status(400).json({ error: 'User ID and input are required' });
+        }
 
+        // Initialize arrays and tracking variables
+        let allTransactions = [];
+        let cursor = null;
+        let hasMore = true;
+        let pageCount = 0;
+        const MAX_PAGES = 10;
+        const TRANSACTIONS_PER_PAGE = 100;
 
-       if (!userId || !input) {
-           return res.status(400).json({ error: 'User ID and input are required' });
-       }
+        // Try to find March transactions specifically
+        const marchConstraints = [
+            {"key": "Created By", "constraint_type": "equals", "value": userId},
+            {"key": "Month", "constraint_type": "equals", "value": "Mar"},
+            {"key": "Year", "constraint_type": "equals", "value": "2025"}
+        ];
 
+        try {
+            console.log("🔍 Searching specifically for March 2025 transactions...");
+           
+            // First attempt: Search by Month and Year
+            while (hasMore && pageCount < MAX_PAGES) {
+                const cursorParam = cursor ? `&cursor=${cursor}` : '';
+                const bubbleURL = `${process.env.BUBBLE_API_URL}/transactions?constraints=${encodeURIComponent(JSON.stringify(marchConstraints))}&sort_field=Date&sort_direction=descending&limit=${TRANSACTIONS_PER_PAGE}${cursorParam}`;
 
-       // Initialize arrays and tracking variables
-       let allTransactions = [];
-       let cursor = null;
-       let hasMore = true;
-       let pageCount = 0;
-       const MAX_PAGES = 10;
-       const TRANSACTIONS_PER_PAGE = 100;
+                console.log(`🔄 Fetching March transactions page ${pageCount + 1} with cursor:`, cursor || 'initial');
 
+                const response = await axios.get(bubbleURL, {
+                    headers: { 'Authorization': `Bearer ${process.env.BUBBLE_API_KEY}` },
+                    timeout: 15000
+                });
 
-       // Try to find March transactions specifically
-       const marchConstraints = [
-           {"key": "Created By", "constraint_type": "equals", "value": userId},
-           {"key": "Month", "constraint_type": "equals", "value": "Mar"},
-           {"key": "Year", "constraint_type": "equals", "value": "2025"}
-       ];
+                const pageTransactions = response.data?.response?.results || [];
+               
+                // Log each transaction's date and Month field
+                pageTransactions.forEach(t => {
+                    console.log(`📅 Transaction:`, {
+                        date: t.Date,
+                        month: t.Month,
+                        year: t.Year,
+                        amount: t.Amount,
+                        description: t.Description
+                    });
+                });
 
+                allTransactions = [...allTransactions, ...pageTransactions];
+                cursor = response.data?.response?.cursor;
+                hasMore = response.data?.response?.remaining > 0;
+                pageCount++;
 
-       try {
-           console.log("🔍 Searching specifically for March 2025 transactions...");
-          
-           // First attempt: Search by Month and Year
-           while (hasMore && pageCount < MAX_PAGES) {
-               const cursorParam = cursor ? `&cursor=${cursor}` : '';
-               const bubbleURL = `${process.env.BUBBLE_API_URL}/transactions?constraints=${encodeURIComponent(JSON.stringify(marchConstraints))}&sort_field=Date&sort_direction=descending&limit=${TRANSACTIONS_PER_PAGE}${cursorParam}`;
+                console.log(`📈 March Search Progress:`, {
+                    page: pageCount,
+                    newTransactions: pageTransactions.length,
+                    totalSoFar: allTransactions.length,
+                    hasMore,
+                    nextCursor: cursor
+                });
+            }
 
+            // If no March transactions found, try with date range as backup
+            if (allTransactions.length === 0) {
+                console.log("⚠️ No March transactions found using Month field, trying date range...");
+               
+                const marchStart = new Date('2025-03-01T00:00:00.000Z');
+                const marchEnd = new Date('2025-03-31T23:59:59.999Z');
+               
+                const dateConstraints = [
+                    {"key": "Created By", "constraint_type": "equals", "value": userId},
+                    {"key": "Date", "constraint_type": "greater than", "value": marchStart.toISOString()},
+                    {"key": "Date", "constraint_type": "less than", "value": marchEnd.toISOString()}
+                ];
 
-               console.log(`🔄 Fetching March transactions page ${pageCount + 1} with cursor:`, cursor || 'initial');
+                cursor = null;
+                hasMore = true;
+                pageCount = 0;
 
+                while (hasMore && pageCount < MAX_PAGES) {
+                    const cursorParam = cursor ? `&cursor=${cursor}` : '';
+                    const bubbleURL = `${process.env.BUBBLE_API_URL}/transactions?constraints=${encodeURIComponent(JSON.stringify(dateConstraints))}&sort_field=Date&sort_direction=descending&limit=${TRANSACTIONS_PER_PAGE}${cursorParam}`;
 
-               const response = await axios.get(bubbleURL, {
-                   headers: { 'Authorization': `Bearer ${process.env.BUBBLE_API_KEY}` },
-                   timeout: 15000
-               });
+                    console.log(`🔄 Fetching March (by date) page ${pageCount + 1}`);
 
+                    const response = await axios.get(bubbleURL, {
+                        headers: { 'Authorization': `Bearer ${process.env.BUBBLE_API_KEY}` },
+                        timeout: 15000
+                    });
 
-               const pageTransactions = response.data?.response?.results || [];
-              
-               // Log each transaction's date and Month field
-               pageTransactions.forEach(t => {
-                   console.log(`📅 Transaction:`, {
-                       date: t.Date,
-                       month: t.Month,
-                       year: t.Year,
-                       amount: t.Amount,
-                       description: t.Description
-                   });
-               });
+                    const pageTransactions = response.data?.response?.results || [];
+                    allTransactions = [...allTransactions, ...pageTransactions];
+                    cursor = response.data?.response?.cursor;
+                    hasMore = response.data?.response?.remaining > 0;
+                    pageCount++;
 
+                    console.log(`📈 March Date Range Progress:`, {
+                        page: pageCount,
+                        newTransactions: pageTransactions.length,
+                        totalSoFar: allTransactions.length,
+                        hasMore
+                    });
+                }
+            }
 
-               allTransactions = [...allTransactions, ...pageTransactions];
-               cursor = response.data?.response?.cursor;
-               hasMore = response.data?.response?.remaining > 0;
-               pageCount++;
+            // Sort all transactions by date (newest first)
+            const sortedTransactions = allTransactions.sort((a, b) => {
+                return new Date(b.Date) - new Date(a.Date);
+            });
 
+            // Take the 50 most recent transactions for GPT-4
+            const recentTransactions = sortedTransactions.slice(0, 50);
 
-               console.log(`📈 March Search Progress:`, {
-                   page: pageCount,
-                   newTransactions: pageTransactions.length,
-                   totalSoFar: allTransactions.length,
-                   hasMore,
-                   nextCursor: cursor
-               });
-           }
+            // Format transactions for GPT-4
+            const formattedTransactions = recentTransactions.map(t => ({
+                date: new Date(t.Date).toLocaleString(),
+                amount: parseFloat(t.Amount).toFixed(2),
+                bank: t.Bank || '',
+                description: t.Description || 'No description',
+                category: t['Category (Old)'] || t.Category || 'Uncategorized',
+                is_pending: t['is_pending?'] || 'false',
+                month: t.Month,
+                year: t.Year
+            }));
 
+            // Analyze monthly distribution
+            const monthlyStats = sortedTransactions.reduce((acc, t) => {
+                const date = new Date(t.Date);
+                const monthKey = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+                if (!acc[monthKey]) {
+                    acc[monthKey] = {
+                        count: 0,
+                        total: 0,
+                        transactions: []
+                    };
+                }
+                acc[monthKey].count++;
+                acc[monthKey].total += parseFloat(t.Amount) || 0;
+                if (acc[monthKey].transactions.length < 3) {
+                    acc[monthKey].transactions.push({
+                        date: t.Date,
+                        amount: t.Amount,
+                        description: t.Description,
+                        month: t.Month,
+                        year: t.Year
+                    });
+                }
+                return acc;
+            }, {});
 
-           // If no March transactions found, try with date range as backup
-           if (allTransactions.length === 0) {
-               console.log("⚠️ No March transactions found using Month field, trying date range...");
-              
-               const marchStart = new Date('2025-03-01T00:00:00.000Z');
-               const marchEnd = new Date('2025-03-31T23:59:59.999Z');
-              
-               const dateConstraints = [
-                   {"key": "Created By", "constraint_type": "equals", "value": userId},
-                   {"key": "Date", "constraint_type": "greater than", "value": marchStart.toISOString()},
-                   {"key": "Date", "constraint_type": "less than", "value": marchEnd.toISOString()}
-               ];
+            // Send to OpenAI using new Responses API with file search
+            const openAIResponse = await client.responses.create({
+                model: "gpt-4o-mini",
+                messages: [
+                    {
+                        role: "system",
+                        content: "You are the Bountisphere Money Coach. You can analyze transactions, provide insights about spending patterns, and help users get the most out of Bountisphere. You have access to both transaction data and Bountisphere documentation to provide comprehensive assistance."
+                    },
+                    {
+                        role: "user",
+                        content: `Please analyze these transactions and answer: ${input}\n\nTransactions: ${JSON.stringify(formattedTransactions, null, 2)}`
+                    }
+                ],
+                tools: [
+                    {
+                        type: "function",
+                        function: {
+                            name: "search_web",
+                            description: "Search the web for current financial information",
+                            parameters: {
+                                type: "object",
+                                properties: {
+                                    query: {
+                                        type: "string",
+                                        description: "The search query"
+                                    }
+                                },
+                                required: ["query"]
+                            }
+                        }
+                    },
+                    {
+                        type: "function",
+                        function: {
+                            name: "search_bountisphere_docs",
+                            description: "Search Bountisphere documentation for help and guidance",
+                            parameters: {
+                                type: "object",
+                                properties: {
+                                    query: {
+                                        type: "string",
+                                        description: "The search query for Bountisphere documentation"
+                                    }
+                                },
+                                required: ["query"]
+                            }
+                        }
+                    }
+                ],
+                file_search: {
+                    vector_store_id: BOUNTISPHERE_VECTOR_STORE_ID,
+                    max_results: 5
+                },
+                temperature: 0.7
+            });
 
+            // Process the response and handle any function calls
+            let finalResponse = openAIResponse.choices[0].message.content;
+            let functionCalls = [];
+            let functionResults = [];
 
-               cursor = null;
-               hasMore = true;
-               pageCount = 0;
+            // Check for function calls in the response
+            if (openAIResponse.choices[0].message.tool_calls) {
+                for (const toolCall of openAIResponse.choices[0].message.tool_calls) {
+                    if (toolCall.function.name === 'search_web') {
+                        const query = JSON.parse(toolCall.function.arguments).query;
+                        console.log("🔍 Web search query:", query);
+                        // Here you would implement the actual web search
+                        functionCalls.push({
+                            type: 'web_search',
+                            query: query
+                        });
+                        // For now, we'll just add a placeholder result
+                        functionResults.push({
+                            type: 'web_search',
+                            query: query,
+                            result: "Web search results would be implemented here"
+                        });
+                    } else if (toolCall.function.name === 'search_bountisphere_docs') {
+                        const query = JSON.parse(toolCall.function.arguments).query;
+                        console.log("📚 Bountisphere docs search query:", query);
+                        // Here you would implement the actual docs search
+                        functionCalls.push({
+                            type: 'docs_search',
+                            query: query
+                        });
+                        // For now, we'll just add a placeholder result
+                        functionResults.push({
+                            type: 'docs_search',
+                            query: query,
+                            result: "Bountisphere documentation search results would be implemented here"
+                        });
+                    }
+                }
+            }
 
+            // If we have function results, send them back to OpenAI for a final response
+            if (functionResults.length > 0) {
+                const finalResponse = await client.responses.create({
+                    model: "gpt-4o-mini",
+                    messages: [
+                        {
+                            role: "system",
+                            content: "You are the Bountisphere Money Coach. You can analyze transactions, provide insights about spending patterns, and help users get the most out of Bountisphere. You have access to both transaction data and Bountisphere documentation to provide comprehensive assistance."
+                        },
+                        {
+                            role: "user",
+                            content: `Please analyze these transactions and answer: ${input}\n\nTransactions: ${JSON.stringify(formattedTransactions, null, 2)}\n\nSearch Results: ${JSON.stringify(functionResults, null, 2)}`
+                        }
+                    ],
+                    temperature: 0.7
+                });
+                finalResponse = finalResponse.choices[0].message.content;
+            }
 
-               while (hasMore && pageCount < MAX_PAGES) {
-                   const cursorParam = cursor ? `&cursor=${cursor}` : '';
-                   const bubbleURL = `${process.env.BUBBLE_API_URL}/transactions?constraints=${encodeURIComponent(JSON.stringify(dateConstraints))}&sort_field=Date&sort_direction=descending&limit=${TRANSACTIONS_PER_PAGE}${cursorParam}`;
+            return res.json({
+                success: true,
+                answer: finalResponse,
+                transactions: formattedTransactions,
+                function_calls: functionCalls,
+                function_results: functionResults,
+                debug: {
+                    totalTransactions: allTransactions.length,
+                    recentTransactionsUsed: formattedTransactions.length,
+                    paginationInfo: {
+                        pagesRetrieved: pageCount,
+                        hasMorePages: hasMore,
+                        transactionsPerPage: TRANSACTIONS_PER_PAGE
+                    },
+                    dateRange: {
+                        requestedRange: {
+                            start: startDate,
+                            end: endDate,
+                            isDefault: !startDate && !endDate
+                        },
+                        actual: {
+                            earliest: sortedTransactions[sortedTransactions.length - 1]?.Date,
+                            latest: sortedTransactions[0]?.Date,
+                            currentServerTime: new Date().toISOString()
+                        }
+                    },
+                    monthlyStats,
+                    searchResults: {
+                        byMonthField: allTransactions.filter(t => 
+                            t.Month === startDate.toLocaleString('en-US', { month: 'short' }) && 
+                            t.Year === startDate.getFullYear().toString()
+                        ).length,
+                        byDateRange: allTransactions.filter(t => {
+                            const date = new Date(t.Date);
+                            return date.getMonth() === startDate.getMonth() && 
+                                   date.getFullYear() === startDate.getFullYear();
+                        }).length
+                    },
+                    query: {
+                        marchConstraints,
+                        dateConstraints,
+                        userId
+                    }
+                }
+            });
 
-
-                   console.log(`🔄 Fetching March (by date) page ${pageCount + 1}`);
-
-
-                   const response = await axios.get(bubbleURL, {
-                       headers: { 'Authorization': `Bearer ${process.env.BUBBLE_API_KEY}` },
-                       timeout: 15000
-                   });
-
-
-                   const pageTransactions = response.data?.response?.results || [];
-                   allTransactions = [...allTransactions, ...pageTransactions];
-                   cursor = response.data?.response?.cursor;
-                   hasMore = response.data?.response?.remaining > 0;
-                   pageCount++;
-
-
-                   console.log(`📈 March Date Range Progress:`, {
-                       page: pageCount,
-                       newTransactions: pageTransactions.length,
-                       totalSoFar: allTransactions.length,
-                       hasMore
-                   });
-               }
-           }
-
-
-           // Sort all transactions by date (newest first)
-           const sortedTransactions = allTransactions.sort((a, b) => {
-               return new Date(b.Date) - new Date(a.Date);
-           });
-
-
-           // Take the 50 most recent transactions for GPT-4
-           const recentTransactions = sortedTransactions.slice(0, 50);
-
-
-           // Format transactions for GPT-4
-           const formattedTransactions = recentTransactions.map(t => ({
-               date: new Date(t.Date).toLocaleString(),
-               amount: parseFloat(t.Amount).toFixed(2),
-               bank: t.Bank || '',
-               description: t.Description || 'No description',
-               category: t['Category (Old)'] || t.Category || 'Uncategorized',
-               is_pending: t['is_pending?'] || 'false',
-               month: t.Month,
-               year: t.Year
-           }));
-
-
-           // Analyze monthly distribution
-           const monthlyStats = sortedTransactions.reduce((acc, t) => {
-               const date = new Date(t.Date);
-               const monthKey = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
-               if (!acc[monthKey]) {
-                   acc[monthKey] = {
-                       count: 0,
-                       total: 0,
-                       transactions: []
-                   };
-               }
-               acc[monthKey].count++;
-               acc[monthKey].total += parseFloat(t.Amount) || 0;
-               if (acc[monthKey].transactions.length < 3) {
-                   acc[monthKey].transactions.push({
-                       date: t.Date,
-                       amount: t.Amount,
-                       description: t.Description,
-                       month: t.Month,
-                       year: t.Year
-                   });
-               }
-               return acc;
-           }, {});
-
-
-           // Send to OpenAI for analysis
-           const openAIResponse = await client.chat.completions.create({
-               model: "gpt-4",
-               messages: [
-                   {
-                       role: "system",
-                       content: "You are the Bountisphere Money Coach. Analyze the transactions and provide insights about spending patterns, focusing on the most recent transactions first."
-                   },
-                   {
-                       role: "user",
-                       content: `Please analyze these transactions and answer: ${input}\n\nTransactions: ${JSON.stringify(formattedTransactions, null, 2)}`
-                   }
-               ],
-               temperature: 0.7
-           });
-
-
-           return res.json({
-               success: true,
-               answer: openAIResponse.choices[0].message.content,
-               transactions: formattedTransactions,
-               debug: {
-                   totalTransactions: allTransactions.length,
-                   recentTransactionsUsed: formattedTransactions.length,
-                   paginationInfo: {
-                       pagesRetrieved: pageCount,
-                       hasMorePages: hasMore,
-                       transactionsPerPage: TRANSACTIONS_PER_PAGE
-                   },
-                   dateRange: {
-                       earliest: sortedTransactions[sortedTransactions.length - 1]?.Date,
-                       latest: sortedTransactions[0]?.Date,
-                       currentServerTime: new Date().toISOString()
-                   },
-                   monthlyStats,
-                   marchSearchResults: {
-                       byMonthField: allTransactions.filter(t => t.Month === 'Mar' && t.Year === '2025').length,
-                       byDateRange: allTransactions.filter(t => {
-                           const date = new Date(t.Date);
-                           return date.getMonth() === 2 && date.getFullYear() === 2025;
-                       }).length
-                   },
-                   query: {
-                       marchConstraints,
-                       userId
-                   }
-               }
-           });
-
-
-       } catch (error) {
-           console.error("❌ Error fetching transactions:", error);
-           throw error;
-       }
-   } catch (error) {
-       console.error("❌ Error in /assistant endpoint:", error);
-       res.status(500).json({
-           error: 'Internal server error',
-           details: error.message,
-           stack: error.stack
-       });
-   }
+        } catch (error) {
+            console.error("❌ Error fetching transactions:", error);
+            throw error;
+        }
+    } catch (error) {
+        console.error("❌ Error in /assistant endpoint:", error);
+        res.status(500).json({
+            error: 'Internal server error',
+            details: error.message,
+            stack: error.stack
+        });
+    }
 });
 
 
