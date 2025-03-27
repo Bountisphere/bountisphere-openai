@@ -89,7 +89,7 @@ app.post('/assistant', async (req, res) => {
       { role: 'user', content: input }
     ];
 
-    // Step A: Send the user’s question to OpenAI with the function definitions
+    // Step A: Send the user's question to OpenAI with the function definitions
     let completion = await openai.chat.completions.create({
       model: 'gpt-4o-mini',
       messages: initialMessages,
@@ -110,12 +110,9 @@ app.post('/assistant', async (req, res) => {
         const realStartDate = args.startDate || usedStartDate;
         const realEndDate = args.endDate || usedEndDate;
 
-        // Build constraints for Bubble
+        // Build constraints for Bubble - only filter by pending status
         const constraints = [
-          { "key": "Created By", "constraint_type": "equals", "value": realUserId },
-          { "key": "is_pending?", "constraint_type": "equals", "value": "false" },
-          { "key": "Date", "constraint_type": "greater than", "value": realStartDate },
-          { "key": "Date", "constraint_type": "less than", "value": realEndDate }
+          { "key": "is_pending?", "constraint_type": "equals", "value": "false" }
         ];
 
         const bubbleURL = `${process.env.BUBBLE_API_URL}/transactions?constraints=${encodeURIComponent(JSON.stringify(constraints))}&sort_field=Date&sort_direction=descending&limit=100`;
@@ -124,14 +121,18 @@ app.post('/assistant', async (req, res) => {
         const response = await axios.get(bubbleURL, {
           headers: { 'Authorization': `Bearer ${process.env.BUBBLE_API_KEY}` }
         });
-        const transactions = response.data?.response?.results || [];
-        console.log(`Retrieved ${transactions.length} transactions from Bubble.`);
+        
+        // Filter transactions by userId in our code
+        const allTransactions = response.data?.response?.results || [];
+        const userTransactions = allTransactions.filter(tx => tx["Created By"] === realUserId);
+        
+        console.log(`Retrieved ${allTransactions.length} total transactions, filtered to ${userTransactions.length} for user ${realUserId}`);
 
-        // Provide transaction data to the model
+        // Provide filtered transaction data to the model
         conversationMessages.push({
           role: "tool",
           tool_call_id: toolCall.id,
-          content: JSON.stringify(transactions)
+          content: JSON.stringify(userTransactions)
         });
 
         // Call OpenAI again with the updated conversation
