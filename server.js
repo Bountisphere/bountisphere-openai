@@ -14,36 +14,30 @@ const openai = new OpenAI({
   defaultHeaders: { 'api-type': 'openai' }
 });
 
-// 2. Define the function (tool) schema, without strict mode
-//    so the model can omit startDate/endDate if it wants.
+// 2. Define the function (tool) schema
 const tools = [
+  {
+    "type": "file_search",
+    "vector_store_ids": ["vs_JScHftFeKAv35y4QHPz9QwMb"]
+  },
+  {
+    "type": "web_search_preview"
+  },
   {
     "type": "function",
     "function": {
       "name": "get_user_transactions",
-      "description": "Fetch a user's transactions from the Bountisphere Bubble API",
+      "description": "Fetch a user's transactions from the Bountisphere endpoint for analysis",
       "parameters": {
         "type": "object",
         "properties": {
           "userId": {
             "type": "string",
             "description": "The user ID whose transactions we need to fetch"
-          },
-          "startDate": {
-            "type": ["string", "null"],
-            "description": "Optional start date in YYYY-MM-DD format"
-          },
-          "endDate": {
-            "type": ["string", "null"],
-            "description": "Optional end date in YYYY-MM-DD format"
           }
         },
-        // Only userId is truly required
-        "required": ["userId"],
-        // Remove strict mode to avoid schema errors
-        "additionalProperties": false
+        "required": ["userId"]
       }
-      // Omit `"strict": true`
     }
   }
 ];
@@ -84,12 +78,14 @@ app.post('/assistant', async (req, res) => {
         role: 'system',
         content: `You are the Bountisphere Money Coach. The userId is ${userId}. 
         The default date range is the last 12 months (from ${usedStartDate} to ${usedEndDate}). 
-        When answering, use transactions within that date range unless the user specifies otherwise.`
+        When answering, use transactions within that date range unless the user specifies otherwise.
+        You can use web search for market data and file search for internal documentation.
+        For user-specific financial data, use the get_user_transactions function.`
       },
       { role: 'user', content: input }
     ];
 
-    // Step A: Send the user’s question to OpenAI with the function definitions
+    // Single call to OpenAI with all tools
     let completion = await openai.chat.completions.create({
       model: 'gpt-4o-mini',
       messages: initialMessages,
@@ -97,60 +93,84 @@ app.post('/assistant', async (req, res) => {
       store: true
     });
 
-    // Check if the model called get_user_transactions
-    let toolCalls = completion.choices[0].message.tool_calls || [];
+    // Handle any tool calls in a loop until we get a final response
     let conversationMessages = [...initialMessages, completion.choices[0].message];
+    let toolCalls = completion.choices[0].message.tool_calls || [];
 
-    // If the model calls get_user_transactions, handle it
-    for (const toolCall of toolCalls) {
-      if (toolCall.function.name === 'get_user_transactions') {
-        // Parse arguments, or default if missing
-        const args = JSON.parse(toolCall.function.arguments);
-        const realUserId = args.userId || userId;
-        const realStartDate = args.startDate || usedStartDate;
-        const realEndDate = args.endDate || usedEndDate;
+    while (toolCalls.length > 0) {
+      for (const toolCall of toolCalls) {
+        let toolResponse;
+        
+        if (toolCall.function.name === 'get_user_transactions') {
+          // Handle transaction function call
+          const args = JSON.parse(toolCall.function.arguments);
+          const realUserId = args.userId || userId;
+          
+          // Build constraints for Bubble API
+          const constraints = [
+            { "key": "Created By", "constraint_type": "equals", "value": realUserId },
+            { "key": "is_pending?", "constraint_type": "equals", "value": false }
+          ];
 
-        // Build constraints for Bubble
-        const constraints = [
-          { "key": "Created By", "constraint_type": "equals", "value": realUserId },
-          { "key": "is_pending?", "constraint_type": "equals", "value": "false" },
-          { "key": "Date", "constraint_type": "greater than", "value": realStartDate },
-          { "key": "Date", "constraint_type": "less than", "value": realEndDate }
-        ];
+          if (usedStartDate) {
+            constraints.push({ "key": "Date", "constraint_type": "greater than", "value": usedStartDate });
+          }
+          if (usedEndDate) {
+            constraints.push({ "key": "Date", "constraint_type": "less than", "value": usedEndDate });
+          }
 
-        const bubbleURL = `${process.env.BUBBLE_API_URL}/transactions?constraints=${encodeURIComponent(JSON.stringify(constraints))}&sort_field=Date&sort_direction=descending&limit=100`;
-        console.log("Fetching transactions from:", bubbleURL);
+          const bubbleURL = 'https://app.bountisphere.com/api/1.1/obj/transactions';
+          const constraintsStr = encodeURIComponent(JSON.stringify(constraints));
+          const fullURL = `${bubbleURL}?constraints=${constraintsStr}&sort_field=Date&sort_direction=descending&limit=100`;
+          
+          const response = await axios.get(fullURL, {
+            headers: {
+              'Authorization': `Bearer b14c2547e2d20dadfb22a8a695849146`,
+              'Content-Type': 'application/json'
+            }
+          });
 
-        const response = await axios.get(bubbleURL, {
-          headers: { 'Authorization': `Bearer ${process.env.BUBBLE_API_KEY}` }
-        });
-        const transactions = response.data?.response?.results || [];
-        console.log(`Retrieved ${transactions.length} transactions from Bubble.`);
+          toolResponse = JSON.stringify(response.data?.response?.results || []);
+        } else if (toolCall.type === 'file_search') {
+          // Handle file search results
+          toolResponse = JSON.stringify(toolCall.file_search_results || []);
+        } else if (toolCall.type === 'web_search_preview') {
+          // Handle web search results
+          toolResponse = JSON.stringify(toolCall.web_search_results || []);
+        }
 
-        // Provide transaction data to the model
+        // Add tool response to conversation
         conversationMessages.push({
           role: "tool",
           tool_call_id: toolCall.id,
-          content: JSON.stringify(transactions)
+          content: toolResponse
         });
-
-        // Call OpenAI again with the updated conversation
-        completion = await openai.chat.completions.create({
-          model: 'gpt-4o-mini',
-          messages: conversationMessages,
-          tools,
-          store: true
-        });
-        conversationMessages.push(completion.choices[0].message);
       }
+
+      // Get next response from model
+      completion = await openai.chat.completions.create({
+        model: 'gpt-4o-mini',
+        messages: conversationMessages,
+        tools,
+        store: true
+      });
+
+      conversationMessages.push(completion.choices[0].message);
+      toolCalls = completion.choices[0].message.tool_calls || [];
     }
 
-    // Final answer from the model
-    const finalText = completion.choices[0].message.content;
-    return res.json({ success: true, answer: finalText });
+    // Return final response
+    return res.json({ 
+      success: true, 
+      answer: completion.choices[0].message.content 
+    });
 
   } catch (error) {
     console.error("Error in /assistant endpoint:", error.message);
+    if (error.response) {
+      console.error('Response status:', error.response.status);
+      console.error('Response data:', JSON.stringify(error.response.data, null, 2));
+    }
     res.status(500).json({
       error: 'Internal server error',
       details: error.message
@@ -158,6 +178,17 @@ app.post('/assistant', async (req, res) => {
   }
 });
 
-app.listen(process.env.PORT || 3000, () => {
-  console.log('🚀 Bountisphere AI server running on port', process.env.PORT || 3000);
+// Error handling middleware
+app.use((err, req, res, next) => {
+  console.error(err.stack);
+  res.status(500).json({
+    error: 'Internal server error',
+    details: err.message
+  });
+});
+
+// Start server
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+  console.log(`🚀 Bountisphere AI server running on port ${PORT}`);
 });
