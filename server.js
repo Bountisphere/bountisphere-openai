@@ -7,14 +7,15 @@ dotenv.config();
 const app = express();
 app.use(express.json());
 
-// Initialize the OpenAI client
+// 1. Initialize the OpenAI client
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
   defaultQuery: { 'api-version': '2024-02-15' },
   defaultHeaders: { 'api-type': 'openai' }
 });
 
-// Define the function (tool) schema for fetching transactions
+// 2. Define the function (tool) schema, without strict mode
+//    so the model can omit startDate/endDate if it wants.
 const tools = [
   {
     "type": "function",
@@ -37,10 +38,12 @@ const tools = [
             "description": "Optional end date in YYYY-MM-DD format"
           }
         },
+        // Only userId is truly required
         "required": ["userId"],
+        // Remove strict mode to avoid schema errors
         "additionalProperties": false
-      },
-      "strict": true
+      }
+      // Omit `"strict": true`
     }
   }
 ];
@@ -75,11 +78,13 @@ app.post('/assistant', async (req, res) => {
     const usedStartDate = startDate || effectiveStartDate;
     const usedEndDate = endDate || effectiveEndDate;
 
-    // Include a system message to provide context (including the default date range)
+    // Include a system message to provide context
     const initialMessages = [
       {
         role: 'system',
-        content: `You are the Bountisphere Money Coach. The userId is ${userId} and the default date range is the last 12 months (from ${usedStartDate} to ${usedEndDate}). When answering, use transactions within that date range unless specified otherwise.`
+        content: `You are the Bountisphere Money Coach. The userId is ${userId}. 
+        The default date range is the last 12 months (from ${usedStartDate} to ${usedEndDate}). 
+        When answering, use transactions within that date range unless the user specifies otherwise.`
       },
       { role: 'user', content: input }
     ];
@@ -92,46 +97,44 @@ app.post('/assistant', async (req, res) => {
       store: true
     });
 
-    // Initialize conversation with the initial messages and the first response
+    // Check if the model called get_user_transactions
     let toolCalls = completion.choices[0].message.tool_calls || [];
     let conversationMessages = [...initialMessages, completion.choices[0].message];
 
-    // Step B: If the model calls get_user_transactions, process it
+    // If the model calls get_user_transactions, handle it
     for (const toolCall of toolCalls) {
       if (toolCall.function.name === 'get_user_transactions') {
-        // Parse arguments from the function call; if dates not provided, use defaults
+        // Parse arguments, or default if missing
         const args = JSON.parse(toolCall.function.arguments);
         const realUserId = args.userId || userId;
         const realStartDate = args.startDate || usedStartDate;
         const realEndDate = args.endDate || usedEndDate;
 
-        // Build constraints for Bubble query
+        // Build constraints for Bubble
         const constraints = [
           { "key": "Created By", "constraint_type": "equals", "value": realUserId },
-          { "key": "is_pending?", "constraint_type": "equals", "value": "false" }
+          { "key": "is_pending?", "constraint_type": "equals", "value": "false" },
+          { "key": "Date", "constraint_type": "greater than", "value": realStartDate },
+          { "key": "Date", "constraint_type": "less than", "value": realEndDate }
         ];
-        constraints.push({ "key": "Date", "constraint_type": "greater than", "value": realStartDate });
-        constraints.push({ "key": "Date", "constraint_type": "less than", "value": realEndDate });
 
-        // Construct the Bubble API URL
         const bubbleURL = `${process.env.BUBBLE_API_URL}/transactions?constraints=${encodeURIComponent(JSON.stringify(constraints))}&sort_field=Date&sort_direction=descending&limit=100`;
         console.log("Fetching transactions from:", bubbleURL);
 
-        // Fetch transactions from Bubble
         const response = await axios.get(bubbleURL, {
           headers: { 'Authorization': `Bearer ${process.env.BUBBLE_API_KEY}` }
         });
         const transactions = response.data?.response?.results || [];
         console.log(`Retrieved ${transactions.length} transactions from Bubble.`);
 
-        // Append a new tool message with the fetched transactions
+        // Provide transaction data to the model
         conversationMessages.push({
           role: "tool",
           tool_call_id: toolCall.id,
           content: JSON.stringify(transactions)
         });
 
-        // Step C: Call OpenAI again with the updated conversation (now including transaction data)
+        // Call OpenAI again with the updated conversation
         completion = await openai.chat.completions.create({
           model: 'gpt-4o-mini',
           messages: conversationMessages,
@@ -142,7 +145,7 @@ app.post('/assistant', async (req, res) => {
       }
     }
 
-    // Final text answer from OpenAI
+    // Final answer from the model
     const finalText = completion.choices[0].message.content;
     return res.json({ success: true, answer: finalText });
 
