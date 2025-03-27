@@ -7,14 +7,13 @@ dotenv.config();
 const app = express();
 app.use(express.json());
 
-// 1. Initialize the OpenAI client
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
   defaultQuery: { 'api-version': '2024-02-15' },
   defaultHeaders: { 'api-type': 'openai' }
 });
 
-// 2. Define a single function (tool) schema for fetching transactions
+// Function schema with userId
 const tools = [
   {
     "type": "function",
@@ -37,28 +36,26 @@ const tools = [
   }
 ];
 
-// Health check route (optional)
-app.get('/', (req, res) => {
-  res.send('Bountisphere AI server is running!');
-});
-
-// 3. Single /assistant endpoint for user queries + function calling
 app.post('/assistant', async (req, res) => {
   try {
     const { input, userId } = req.body;
     if (!input || !userId) {
-      return res.status(400).json({
-        error: 'Must provide both "input" (the user question) and "userId".'
-      });
+      return res.status(400).json({ error: 'Must provide "input" and "userId".' });
     }
 
-    // Step A: Send the user’s question to OpenAI with the function schema
+    // Step A: Provide userId in the system message so the model knows it has that info
     const initialMessages = [
+      {
+        role: 'system',
+        content: `You are the Bountisphere Money Coach. 
+        The userId is ${userId}. 
+        If the user asks about their transactions, call get_user_transactions with userId = "${userId}".`
+      },
       { role: 'user', content: input }
     ];
 
     let completion = await openai.chat.completions.create({
-      model: 'gpt-4o-mini',   // Using GPT-4o-mini as requested
+      model: 'gpt-4o-mini',
       messages: initialMessages,
       tools,
       store: true
@@ -66,61 +63,55 @@ app.post('/assistant', async (req, res) => {
 
     // Check if the model called the function
     let toolCalls = completion.choices[0].message.tool_calls || [];
-    // Keep track of the entire conversation
     let conversationMessages = [...initialMessages, completion.choices[0].message];
 
-    // Handle any function calls the model made
+    // For each function call, handle it
     for (const toolCall of toolCalls) {
       if (toolCall.function.name === 'get_user_transactions') {
-        // 1. Parse the function arguments
         const args = JSON.parse(toolCall.function.arguments);
+        // We already told the model the userId, but just in case:
         const realUserId = args.userId || userId;
 
-        // 2. Fetch transactions from Bubble
+        // 1. Fetch from Bubble
         const constraints = [
           { "key": "Created By", "constraint_type": "equals", "value": realUserId },
           { "key": "is_pending?", "constraint_type": "equals", "value": "false" }
         ];
         const bubbleURL = `${process.env.BUBBLE_API_URL}/transactions?constraints=${encodeURIComponent(JSON.stringify(constraints))}&sort_field=Date&sort_direction=descending&limit=100`;
 
-        console.log("Fetching transactions from:", bubbleURL);
         const response = await axios.get(bubbleURL, {
           headers: { 'Authorization': `Bearer ${process.env.BUBBLE_API_KEY}` }
         });
         const transactions = response.data?.response?.results || [];
 
-        // 3. Append a tool message with the fetched transactions
+        // 2. Provide the results back as a tool message
         conversationMessages.push({
           role: "tool",
           tool_call_id: toolCall.id,
           content: JSON.stringify(transactions)
         });
 
-        // 4. Call OpenAI again so it can incorporate the transaction data into a final answer
+        // 3. Call OpenAI again
         completion = await openai.chat.completions.create({
           model: 'gpt-4o-mini',
           messages: conversationMessages,
           tools,
           store: true
         });
-        // Add the new response to our conversation
         conversationMessages.push(completion.choices[0].message);
       }
     }
 
-    // Step C: Return the final text answer to Bubble
+    // Final text
     const finalText = completion.choices[0].message.content;
     return res.json({ success: true, answer: finalText });
 
   } catch (error) {
-    console.error("Error in /assistant endpoint:", error.message);
-    res.status(500).json({
-      error: 'Internal server error',
-      details: error.message
-    });
+    console.error("Error in /assistant:", error.message);
+    res.status(500).json({ error: 'Internal server error', details: error.message });
   }
 });
 
 app.listen(process.env.PORT || 3000, () => {
-  console.log('🚀 Bountisphere AI server running on port', process.env.PORT || 3000);
+  console.log('Server is running!');
 });
