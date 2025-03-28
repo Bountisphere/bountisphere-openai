@@ -14,36 +14,32 @@ const openai = new OpenAI({
   defaultHeaders: { 'api-type': 'openai' }
 });
 
-// 2. Define the function (tool) schema, without strict mode
-//    so the model can omit startDate/endDate if it wants.
+// 2. Define the function (tool) schema
 const tools = [
   {
-    "type": "function",
-    "function": {
-      "name": "get_user_transactions",
-      "description": "Fetch a user's transactions from the Bountisphere Bubble API",
-      "parameters": {
-        "type": "object",
-        "properties": {
-          "userId": {
-            "type": "string",
-            "description": "The user ID whose transactions we need to fetch"
+    type: "function",
+    function: {
+      name: "get_user_transactions",
+      description: "Fetch a user's transactions from the Bountisphere Bubble API",
+      parameters: {
+        type: "object",
+        properties: {
+          userId: {
+            type: "string",
+            description: "The user ID whose transactions we need to fetch"
           },
-          "startDate": {
-            "type": ["string", "null"],
-            "description": "Optional start date in YYYY-MM-DD format"
+          startDate: {
+            type: ["string", "null"],
+            description: "Optional start date in YYYY-MM-DD format"
           },
-          "endDate": {
-            "type": ["string", "null"],
-            "description": "Optional end date in YYYY-MM-DD format"
+          endDate: {
+            type: ["string", "null"],
+            description: "Optional end date in YYYY-MM-DD format"
           }
         },
-        // Only userId is truly required
-        "required": ["userId"],
-        // Remove strict mode to avoid schema errors
-        "additionalProperties": false
+        required: ["userId"],
+        additionalProperties: false
       }
-      // Omit `"strict": true`
     }
   }
 ];
@@ -53,7 +49,7 @@ app.get('/', (req, res) => {
   res.send('Bountisphere AI server is running!');
 });
 
-// Helper function to compute default date range (last 12 months)
+// Helper function for date range
 function getDefaultDateRange() {
   const today = new Date();
   const effectiveEndDate = today.toISOString().split('T')[0];
@@ -63,22 +59,20 @@ function getDefaultDateRange() {
   return { effectiveStartDate, effectiveEndDate };
 }
 
-// Single /assistant endpoint for user queries and function calling
+// MAIN: OpenAI assistant handler
 app.post('/assistant', async (req, res) => {
   try {
     const { input, userId, startDate, endDate } = req.body;
     if (!input || !userId) {
       return res.status(400).json({
-        error: 'Must provide both "input" (the user question) and "userId".'
+        error: 'Must provide both "input" (user question) and "userId".'
       });
     }
 
-    // Compute default date range if not provided
     const { effectiveStartDate, effectiveEndDate } = getDefaultDateRange();
     const usedStartDate = startDate || effectiveStartDate;
     const usedEndDate = endDate || effectiveEndDate;
 
-    // Include a system message to provide context
     const initialMessages = [
       {
         role: 'system',
@@ -89,63 +83,31 @@ app.post('/assistant', async (req, res) => {
       { role: 'user', content: input }
     ];
 
-    // Step A: Send the user’s question to OpenAI with the function definitions
-    let completion = await openai.chat.completions.create({
+    const completion = await openai.chat.completions.create({
       model: 'gpt-4o-mini',
       messages: initialMessages,
       tools,
+      tool_choice: "auto",
+      stream: false,
       store: true
     });
 
-    // Check if the model called get_user_transactions
-    let toolCalls = completion.choices[0].message.tool_calls || [];
-    let conversationMessages = [...initialMessages, completion.choices[0].message];
+    const toolCalls = completion.choices[0].message.tool_calls || [];
+    const response_id = completion.id;
+    const tool_call_id = toolCalls.length > 0 ? toolCalls[0].id : null;
 
-    // If the model calls get_user_transactions, handle it
-    for (const toolCall of toolCalls) {
-      if (toolCall.function.name === 'get_user_transactions') {
-        // Parse arguments, or default if missing
-        const args = JSON.parse(toolCall.function.arguments);
-        const realUserId = args.userId || userId;
-        const realStartDate = args.startDate || usedStartDate;
-        const realEndDate = args.endDate || usedEndDate;
-
-        // Build constraints for Bubble
-        const constraints = [
-          { "key": "Created By", "constraint_type": "equals", "value": realUserId },
-          { "key": "is_pending?", "constraint_type": "equals", "value": "false" },
-          { "key": "Date", "constraint_type": "greater than", "value": realStartDate },
-          { "key": "Date", "constraint_type": "less than", "value": realEndDate }
-        ];
-
-        const bubbleURL = `${process.env.BUBBLE_API_URL}/transactions?constraints=${encodeURIComponent(JSON.stringify(constraints))}&sort_field=Date&sort_direction=descending&limit=100`;
-        console.log("Fetching transactions from:", bubbleURL);
-
-        const response = await axios.get(bubbleURL, {
-          headers: { 'Authorization': `Bearer ${process.env.BUBBLE_API_KEY}` }
-        });
-        const transactions = response.data?.response?.results || [];
-        console.log(`Retrieved ${transactions.length} transactions from Bubble.`);
-
-        // Provide transaction data to the model
-        conversationMessages.push({
-          role: "tool",
-          tool_call_id: toolCall.id,
-          content: JSON.stringify(transactions)
-        });
-
-        // Call OpenAI again with the updated conversation
-        completion = await openai.chat.completions.create({
-          model: 'gpt-4o-mini',
-          messages: conversationMessages,
-          tools,
-          store: true
-        });
-        conversationMessages.push(completion.choices[0].message);
-      }
+    if (tool_call_id) {
+      // Tool call needs to be fulfilled by Bubble via POST to our /finalize-tool-output endpoint
+      return res.json({
+        requires_tool: true,
+        response_id,
+        tool_call_id,
+        tool_name: toolCalls[0].function.name,
+        tool_arguments: JSON.parse(toolCalls[0].function.arguments)
+      });
     }
 
-    // Final answer from the model
+    // If no tool needed, just return answer
     const finalText = completion.choices[0].message.content;
     return res.json({ success: true, answer: finalText });
 
@@ -158,6 +120,43 @@ app.post('/assistant', async (req, res) => {
   }
 });
 
+// FINALIZE: Send tool output to OpenAI
+app.post('/finalize-tool-output', async (req, res) => {
+  try {
+    const { response_id, tool_call_id, transactions } = req.body;
+
+    if (!response_id || !tool_call_id || !transactions) {
+      return res.status(400).json({ error: 'Missing required fields: response_id, tool_call_id, transactions' });
+    }
+
+    const endpoint = `https://api.openai.com/v1/responses/${response_id}/submit_tool_outputs`;
+
+    const payload = {
+      tool_outputs: [
+        {
+          tool_call_id,
+          output: { transactions }
+        }
+      ]
+    };
+
+    const response = await axios.post(endpoint, payload, {
+      headers: {
+        'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
+        'Content-Type': 'application/json'
+      }
+    });
+
+    console.log('✅ Tool output submitted to OpenAI');
+    res.json({ success: true, data: response.data });
+
+  } catch (error) {
+    console.error('❌ Error submitting tool output:', error.message);
+    res.status(500).json({ error: 'Failed to submit tool output', details: error.message });
+  }
+});
+
+// Start server
 app.listen(process.env.PORT || 3000, () => {
   console.log('🚀 Bountisphere AI server running on port', process.env.PORT || 3000);
 });
