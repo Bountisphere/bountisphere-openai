@@ -124,7 +124,7 @@ app.post('/finalize-tool-output', async (req, res) => {
     }
 
     const endpoint = `https://api.openai.com/v1/responses/${response_id}/submit_tool_outputs`;
-
+    
     const payload = {
       tool_outputs: [
         {
