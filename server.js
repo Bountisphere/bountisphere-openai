@@ -3,7 +3,10 @@ import axios from 'axios';
 import dotenv from 'dotenv';
 import OpenAI from 'openai';
 
+// Load environment variables
 dotenv.config();
+
+// Initialize Express app
 const app = express();
 app.use(express.json());
 
@@ -12,7 +15,7 @@ const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY
 });
 
-// Tools: Defined with top-level name, type, description, and parameters using nullable: true
+// Define the function (tool) schema
 const tools = [
   {
     type: "function",
@@ -23,95 +26,173 @@ const tools = [
       properties: {
         userId: {
           type: "string",
-          description: "The user ID for the transactions"
+          description: "The user ID whose transactions we need to fetch"
         },
         startDate: {
           type: "string",
-          nullable: true,
           description: "Optional start date in YYYY-MM-DD format"
         },
         endDate: {
           type: "string",
-          nullable: true,
           description: "Optional end date in YYYY-MM-DD format"
         }
       },
-      required: ["userId"],
-      additionalProperties: false
+      required: ["userId"]
     }
   }
 ];
 
+// Rate limiting middleware
+const rateLimit = {
+  windowMs: 60 * 1000, // 1 minute
+  maxRequests: 10,
+  current: 0,
+  resetTime: Date.now() + 60 * 1000
+};
+
+function rateLimiter(req, res, next) {
+  const now = Date.now();
+  if (now > rateLimit.resetTime) {
+    rateLimit.current = 0;
+    rateLimit.resetTime = now + rateLimit.windowMs;
+  }
+
+  if (rateLimit.current >= rateLimit.maxRequests) {
+    return res.status(429).json({
+      error: 'Rate limit exceeded. Please try again in a minute.',
+      details: 'Too many requests in this time window.'
+    });
+  }
+
+  rateLimit.current++;
+  next();
+}
+
+// Apply rate limiting to all routes
+app.use(rateLimiter);
+
 // Health check route
 app.get('/', (req, res) => {
-  res.send('✅ Bountisphere AI server is up!');
+  res.json({
+    status: 'ok',
+    message: 'Bountisphere AI server is running!',
+    environment: {
+      bubbleApiConfigured: !!process.env.BUBBLE_API_URL && !!process.env.BUBBLE_API_KEY,
+      openaiApiConfigured: !!process.env.OPENAI_API_KEY
+    }
+  });
 });
 
-// Helper for default date range (last 12 months)
+// Helper function to compute default date range (last 12 months)
 function getDefaultDateRange() {
   const today = new Date();
-  const end = today.toISOString().split('T')[0];
+  const effectiveEndDate = today.toISOString().split('T')[0];
   const lastYear = new Date(today);
   lastYear.setFullYear(today.getFullYear() - 1);
-  const start = lastYear.toISOString().split('T')[0];
-  return { start, end };
+  const effectiveStartDate = lastYear.toISOString().split('T')[0];
+  return { effectiveStartDate, effectiveEndDate };
 }
 
 // Assistant endpoint
 app.post('/assistant', async (req, res) => {
   try {
-    const { input, userId, startDate, endDate } = req.body;
+    const { input, userId } = req.body;
     if (!input || !userId) {
       return res.status(400).json({ error: 'Missing "input" or "userId".' });
     }
 
-    const { start, end } = getDefaultDateRange();
-    const usedStartDate = startDate || start;
-    const usedEndDate = endDate || end;
-
-    // Build instructions for context
-    const instructions = `You are the Bountisphere Money Coach. The userId is ${userId}.
-Use transactions from ${usedStartDate} to ${usedEndDate} unless the user specifies otherwise.`;
-
-    console.log("📝 Instructions:", instructions);
-    console.log("📝 User input:", input);
-
-    // According to the official docs, pass input as a plain string
-    const response = await openai.responses.create({
-      model: "gpt-4o",
-      instructions,
-      input, // Passing the input as a plain string
-      tools,
-      tool_choice: "auto",
-      store: true
+    // Create initial response
+    const response = await openai.chat.completions.create({
+      model: "gpt-4",
+      messages: [
+        {
+          role: "system",
+          content: "You are the Bountisphere Money Coach. Help users understand their transactions and financial patterns."
+        },
+        {
+          role: "user",
+          content: input
+        }
+      ],
+      functions: tools,
+      function_call: "auto"
     });
 
-    console.log("🧠 Assistant response ID:", response.id);
-    const outputItems = response.output || [];
-    console.log("🔎 Output items:", JSON.stringify(outputItems, null, 2));
+    const responseMessage = response.choices[0].message;
 
-    // Check if the model requested a function call
-    const functionCalls = outputItems.filter(item => item.type === "function_call");
-    if (functionCalls.length > 0) {
-      const call = functionCalls[0];
-      console.log("🔧 Function call found:", call);
+    // Check if the model wants to call a function
+    if (responseMessage.function_call) {
+      // Get the function arguments
+      const functionArgs = JSON.parse(responseMessage.function_call.arguments);
+      
+      // Add userId if not provided in the function call
+      functionArgs.userId = functionArgs.userId || userId;
+
+      // Prepare Bubble API request
+      const constraints = [
+        { "key": "Created By", "constraint_type": "equals", "value": functionArgs.userId }
+      ];
+
+      if (functionArgs.startDate) {
+        constraints.push({ 
+          "key": "Date", 
+          "constraint_type": "greater than", 
+          "value": functionArgs.startDate 
+        });
+      }
+
+      if (functionArgs.endDate) {
+        constraints.push({ 
+          "key": "Date", 
+          "constraint_type": "less than", 
+          "value": functionArgs.endDate 
+        });
+      }
+
+      // Call Bubble API
+      const bubbleURL = `${process.env.BUBBLE_API_URL}/transactions?constraints=${encodeURIComponent(JSON.stringify(constraints))}`;
+      const bubbleResponse = await axios.get(bubbleURL, {
+        headers: { 'Authorization': `Bearer ${process.env.BUBBLE_API_KEY}` }
+      });
+
+      const transactions = bubbleResponse.data?.response?.results || [];
+
+      // Get final response with transaction data
+      const finalResponse = await openai.chat.completions.create({
+        model: "gpt-4",
+        messages: [
+          {
+            role: "system",
+            content: "You are the Bountisphere Money Coach. Help users understand their transactions and financial patterns."
+          },
+          {
+            role: "user",
+            content: input
+          },
+          {
+            role: "assistant",
+            content: responseMessage.content,
+            function_call: responseMessage.function_call
+          },
+          {
+            role: "function",
+            name: "get_user_transactions",
+            content: JSON.stringify(transactions)
+          }
+        ]
+      });
 
       return res.json({
-        requires_tool: true,
-        response_id: response.id,
-        tool_call_id: call.id,
-        tool_name: call.name,
-        tool_arguments: call.arguments ? JSON.parse(call.arguments) : {}
+        success: true,
+        answer: finalResponse.choices[0].message.content
       });
     }
 
-    // Otherwise, try to retrieve the final text
-    const finalText = response.output_text
-      || (outputItems.find(item => item.type === "message")?.content?.[0]?.text ?? "")
-      || "";
-
-    console.log("💬 Final answer:", finalText);
-    return res.json({ success: true, answer: finalText });
+    // If no function call was needed, return the direct response
+    return res.json({
+      success: true,
+      answer: responseMessage.content
+    });
 
   } catch (err) {
     console.error("❌ /assistant error:", err?.response?.data || err.message);
@@ -122,47 +203,46 @@ Use transactions from ${usedStartDate} to ${usedEndDate} unless the user specifi
   }
 });
 
-// Finalize tool output endpoint
-app.post('/finalize-tool-output', async (req, res) => {
-  try {
-    const { response_id, tool_call_id, transactions } = req.body;
-    if (!response_id || !tool_call_id || !transactions) {
-      return res.status(400).json({ error: 'Missing response_id, tool_call_id, or transactions' });
-    }
+// Start server with proper error handling
+const PORT = process.env.PORT || 3000;
 
-    const endpoint = `https://api.openai.com/v1/responses/${response_id}/submit_tool_outputs`;
-    const payload = {
-      tool_outputs: [
-        {
-          tool_call_id,
-          output: { transactions }
-        }
-      ]
-    };
-
-    console.log("📬 Finalize payload:", JSON.stringify(payload, null, 2));
-
-    const result = await axios.post(endpoint, payload, {
-      headers: {
-        Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-        'Content-Type': 'application/json'
-      }
-    });
-
-    console.log("✅ Tool output submitted successfully:", result.status);
-    return res.json({ success: true, data: result.data });
-
-  } catch (err) {
-    console.error("❌ finalize-tool-output error:", err?.response?.data || err.message);
-    return res.status(500).json({
-      error: "Failed to submit tool output",
-      details: err?.response?.data || err.message
-    });
+const server = app.listen(PORT, '0.0.0.0', (error) => {
+  if (error) {
+    console.error('❌ Error starting server:', error);
+    process.exit(1);
   }
+  console.log(`🚀 Bountisphere AI server running at http://localhost:${PORT}`);
+  
+  // Log environment configuration
+  console.log('Environment Configuration:');
+  console.log('- BUBBLE_API_URL:', process.env.BUBBLE_API_URL);
+  console.log('- OpenAI API Key:', process.env.OPENAI_API_KEY ? '✓ Set' : '✗ Missing');
+  console.log('- Bubble API Key:', process.env.BUBBLE_API_KEY ? '✓ Set' : '✗ Missing');
 });
 
-// Start server
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`🚀 Bountisphere AI server is running on port ${PORT}`);
+// Handle server errors
+server.on('error', (error) => {
+  if (error.code === 'EADDRINUSE') {
+    console.error(`❌ Port ${PORT} is already in use. Please try a different port or kill the process using this port.`);
+  } else {
+    console.error('❌ Server error:', error);
+  }
+  process.exit(1);
+});
+
+// Handle process termination
+process.on('SIGTERM', () => {
+  console.log('👋 SIGTERM received. Shutting down gracefully...');
+  server.close(() => {
+    console.log('✅ Server closed');
+    process.exit(0);
+  });
+});
+
+process.on('SIGINT', () => {
+  console.log('👋 SIGINT received. Shutting down gracefully...');
+  server.close(() => {
+    console.log('✅ Server closed');
+    process.exit(0);
+  });
 });
