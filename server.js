@@ -7,17 +7,18 @@ dotenv.config();
 const app = express();
 app.use(express.json());
 
-// ✅ Initialize OpenAI client
+// ✅ OpenAI client
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
-  defaultQuery: { 'api-version': '2024-02-15' },
-  defaultHeaders: { 'api-type': 'openai' }
+  // If needed:
+  // defaultQuery: { 'api-version': '2024-02-15' },
+  // defaultHeaders: { 'api-type': 'openai' }
 });
 
-// ✅ Define tool schema
+// ✅ Tool definition
 const tools = [
   {
-    type: "function",
+    // No top-level "type" here. We'll rely on the "function" sub-object.
     function: {
       name: "get_user_transactions",
       description: "Fetch a user's transactions from the Bountisphere Bubble API",
@@ -30,11 +31,11 @@ const tools = [
           },
           startDate: {
             type: ["string", "null"],
-            description: "Optional start date in YYYY-MM-DD format"
+            description: "Optional start date (YYYY-MM-DD)"
           },
           endDate: {
             type: ["string", "null"],
-            description: "Optional end date in YYYY-MM-DD format"
+            description: "Optional end date (YYYY-MM-DD)"
           }
         },
         required: ["userId"],
@@ -49,7 +50,7 @@ app.get('/', (req, res) => {
   res.send('✅ Bountisphere AI server is live!');
 });
 
-// ✅ Default date range
+// ✅ Helper: default date range
 function getDefaultDateRange() {
   const today = new Date();
   const end = today.toISOString().split('T')[0];
@@ -59,7 +60,7 @@ function getDefaultDateRange() {
   return { start, end };
 }
 
-// ✅ Assistant call
+// ✅ Assistant endpoint
 app.post('/assistant', async (req, res) => {
   try {
     const { input, userId, startDate, endDate } = req.body;
@@ -71,65 +72,88 @@ app.post('/assistant', async (req, res) => {
     const usedStartDate = startDate || start;
     const usedEndDate = endDate || end;
 
-    const systemMessage = `You are the Bountisphere Money Coach. The userId is ${userId}. Use transactions from ${usedStartDate} to ${usedEndDate} unless the user specifies otherwise.`;
+    // System instructions
+    const instructions = `You are the Bountisphere Money Coach. The userId is ${userId}.
+Use transactions from ${usedStartDate} to ${usedEndDate} unless the user specifies otherwise.`;
 
-    const response = await openai.responses.create({
-      model: 'gpt-4o',
-      instructions: systemMessage,
+    console.log("📝 /assistant input:", input);
+    console.log("📝 instructions:", instructions);
+
+    // The user's question as a single "message" item
+    const openaiResponse = await openai.responses.create({
+      model: "gpt-4o",
+      instructions,
+      tools,
+      tool_choice: "auto",
       input: [
         {
-          type: 'input_text',
-          text: input
+          type: "message",
+          role: "user",
+          content: [
+            {
+              type: "message",
+              text: input
+            }
+          ]
         }
       ],
-      tools,
-      tool_choice: 'auto',
       store: true
     });
 
-    console.log('🧠 Assistant response ID:', response.id);
-    const outputs = response.output || [];
-    const toolCalls = outputs.filter(item => item.type === 'function_call');
+    console.log("🧠 OpenAI response ID:", openaiResponse.id);
+
+    // Possibly multiple items in output. We'll find function calls or final text.
+    const outputItems = openaiResponse.output || [];
+    // e.g. look for { type: 'function_call', ... }
+    const toolCalls = outputItems.filter(item => item.type === 'function_call');
 
     if (toolCalls.length > 0) {
-      const tool_call_id = toolCalls[0].id;
-      const args = toolCalls[0].function_call.arguments;
-      const toolName = toolCalls[0].function_call.name;
+      const firstToolCall = toolCalls[0];
+      console.log("🔧 Tool call found:", firstToolCall);
 
-      console.log('🛠️ Tool call requested:', toolName, args);
+      const response_id = openaiResponse.id;
+      const tool_call_id = firstToolCall.id;
+      const tool_name = firstToolCall.function_call?.name || "unknown_tool";
+      const tool_argsRaw = firstToolCall.function_call?.arguments || "{}";
 
       return res.json({
         requires_tool: true,
-        response_id: response.id,
+        response_id,
         tool_call_id,
-        tool_name: toolName,
-        tool_arguments: JSON.parse(args)
+        tool_name,
+        tool_arguments: JSON.parse(tool_argsRaw)
       });
     }
 
-    const answer = response.output_text || '';
-    return res.json({ success: true, answer });
+    // If no tool calls, return the final text
+    // Some models store direct text in output_text or in content array
+    const finalText = openaiResponse.output_text 
+      || outputItems.find(item => item.type === 'message')?.content?.[0]?.text
+      || '';
+
+    console.log("💬 Final answer:", finalText);
+    return res.json({ success: true, answer: finalText });
 
   } catch (err) {
-    console.error('❌ Assistant failed:', err.response?.data || err.message);
-    res.status(500).json({
-      error: 'Assistant failed',
-      details: err.response?.data || err.message
+    console.error("❌ /assistant error:", err?.response?.data || err.message);
+    return res.status(500).json({
+      error: "Assistant failed",
+      details: err?.response?.data || err.message
     });
   }
 });
 
-// ✅ Tool output submission
+// ✅ Finalize tool output
 app.post('/finalize-tool-output', async (req, res) => {
   try {
     const { response_id, tool_call_id, transactions } = req.body;
-
     if (!response_id || !tool_call_id || !transactions) {
-      return res.status(400).json({ error: 'Missing response_id, tool_call_id, or transactions' });
+      return res.status(400).json({
+        error: 'Missing response_id, tool_call_id, or transactions'
+      });
     }
 
     const endpoint = `https://api.openai.com/v1/responses/${response_id}/submit_tool_outputs`;
-
     const payload = {
       tool_outputs: [
         {
@@ -139,6 +163,8 @@ app.post('/finalize-tool-output', async (req, res) => {
       ]
     };
 
+    console.log("🛠️ finalize-tool-output payload:", payload);
+
     const result = await axios.post(endpoint, payload, {
       headers: {
         Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
@@ -146,20 +172,20 @@ app.post('/finalize-tool-output', async (req, res) => {
       }
     });
 
-    console.log('✅ Tool output submitted successfully.');
-    res.json({ success: true, data: result.data });
+    console.log("✅ Tool output submitted to OpenAI:", result.status);
+    return res.json({ success: true, data: result.data });
 
   } catch (err) {
-    console.error('❌ Failed to submit tool output:', err.response?.data || err.message);
-    res.status(500).json({
-      error: 'Failed to submit tool output',
-      details: err.response?.data || err.message
+    console.error("❌ finalize-tool-output error:", err?.response?.data || err.message);
+    return res.status(500).json({
+      error: "Failed to submit tool output",
+      details: err?.response?.data || err.message
     });
   }
 });
 
-// ✅ Start server
+// ✅ Start the server
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`🚀 Bountisphere AI server is running on port ${PORT}`);
+  console.log(`🚀 Bountisphere AI server listening on port ${PORT}`);
 });
