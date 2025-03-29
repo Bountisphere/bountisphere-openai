@@ -202,31 +202,34 @@ app.post('/assistant', async (req, res) => {
       };
 
       // Get final response with transaction data
-      const finalResponse = await openai.chat.completions.create({
-        model: "gpt-4",
-        messages: [
+      const finalResponse = await axios.post('https://api.openai.com/v1/responses', {
+        instructions: `You are the Bountisphere Money Coach. The current user's ID is ${userId}. Help users understand their transactions and financial patterns. ${transactionSummary.note || ''}`,
+        model: "gpt-4o-mini-2024-07-18",
+        text: { format: { type: "text" } },
+        tools: tools,
+        output: [
           {
-            role: "system",
-            content: `You are the Bountisphere Money Coach. The current user's ID is ${userId}. Help users understand their transactions and financial patterns. ${transactionSummary.note || ''}`
-          },
-          {
+            type: "message",
             role: "user",
             content: input
           },
           {
-            role: "assistant",
-            content: responseMessage.content,
-            function_call: responseMessage.function_call
-          },
-          {
-            role: "function",
+            type: "function_result",
             name: "get_user_transactions",
             content: JSON.stringify(transactionSummary)
           }
         ]
+      }, {
+        headers: {
+          'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
+          'Content-Type': 'application/json'
+        }
       });
 
-      finalAnswer = finalResponse.choices[0].message.content;
+      // Extract the text response from the message output
+      const messageOutput = finalResponse.data.output.find(o => o.type === "message");
+      finalAnswer = messageOutput?.content[0]?.text || "Sorry, I couldn't analyze your transactions.";
+      
       responseMetadata = {
         type: "transaction_response",
         total_transactions: transactionSummary.total_transactions,
@@ -234,13 +237,14 @@ app.post('/assistant', async (req, res) => {
       };
     } else {
       // Direct response (like web search results)
-      finalAnswer = responseMessage.content;
+      const messageOutput = response.data.output.find(o => o.type === "message");
+      finalAnswer = messageOutput?.content[0]?.text || responseMessage.content;
       responseMetadata = {
         type: "direct_response"
       };
 
       // Extract citations if they exist
-      const urlMatch = responseMessage.content.match(/\[([^\]]+)\]\(([^)]+)\)/g);
+      const urlMatch = finalAnswer.match(/\[([^\]]+)\]\(([^)]+)\)/g);
       if (urlMatch) {
         responseMetadata.citations = urlMatch.map(citation => {
           const [_, text, url] = citation.match(/\[([^\]]+)\]\(([^)]+)\)/);
