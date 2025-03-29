@@ -130,14 +130,18 @@ app.post('/assistant', async (req, res) => {
 
       // Prepare Bubble API request
       const constraints = [
-        { "key": "Created By", "constraint_type": "equals", "value": functionArgs.userId }
+        { 
+          "key": "Account Holder", 
+          "constraint_type": "equals", 
+          "value": functionArgs.userId 
+        }
       ];
 
       if (functionArgs.startDate) {
         constraints.push({ 
           "key": "Date", 
           "constraint_type": "greater than", 
-          "value": functionArgs.startDate 
+          "value": functionArgs.startDate + "T00:00:00.000Z"
         });
       }
 
@@ -145,17 +149,23 @@ app.post('/assistant', async (req, res) => {
         constraints.push({ 
           "key": "Date", 
           "constraint_type": "less than", 
-          "value": functionArgs.endDate 
+          "value": functionArgs.endDate + "T00:00:00.000Z"
         });
       }
 
       // Call Bubble API
       const bubbleURL = `${process.env.BUBBLE_API_URL}/transactions?constraints=${encodeURIComponent(JSON.stringify(constraints))}`;
+      console.log("Fetching transactions from:", bubbleURL);
+      
       const bubbleResponse = await axios.get(bubbleURL, {
-        headers: { 'Authorization': `Bearer ${process.env.BUBBLE_API_KEY}` }
+        headers: { 
+          'Authorization': `Bearer ${process.env.BUBBLE_API_KEY}`,
+          'Content-Type': 'application/json'
+        }
       });
 
       const transactions = bubbleResponse.data?.response?.results || [];
+      console.log(`Retrieved ${transactions.length} transactions from Bubble.`);
 
       // Get final response with transaction data
       const finalResponse = await openai.chat.completions.create({
