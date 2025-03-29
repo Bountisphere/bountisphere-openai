@@ -107,7 +107,7 @@ app.post('/assistant', async (req, res) => {
       messages: [
         {
           role: "system",
-          content: "You are the Bountisphere Money Coach. Help users understand their transactions and financial patterns."
+          content: `You are the Bountisphere Money Coach. The current user's ID is ${userId}. When analyzing transactions, automatically use this ID to fetch the data. Help users understand their transactions and financial patterns.`
         },
         {
           role: "user",
