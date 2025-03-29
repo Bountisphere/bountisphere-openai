@@ -120,6 +120,10 @@ app.post('/assistant', async (req, res) => {
 
     const responseMessage = response.choices[0].message;
 
+    // Initialize response object
+    let finalAnswer;
+    let responseMetadata = {};
+
     // Check if the model wants to call a function
     if (responseMessage.function_call) {
       // Get the function arguments
@@ -137,6 +141,7 @@ app.post('/assistant', async (req, res) => {
         }
       ];
 
+      // Add date constraints if provided
       if (functionArgs.startDate) {
         constraints.push({ 
           "key": "Date", 
@@ -221,36 +226,34 @@ app.post('/assistant', async (req, res) => {
         ]
       });
 
-      // Format the response based on content type
-      const formattedResponse = {
-        success: true,
-        answer: finalResponse.choices[0].message.content,
-        metadata: {
-          total_transactions: transactionSummary.total_transactions,
-          shown_transactions: transactionSummary.showing_transactions
-        }
+      finalAnswer = finalResponse.choices[0].message.content;
+      responseMetadata = {
+        type: "transaction_response",
+        total_transactions: transactionSummary.total_transactions,
+        shown_transactions: transactionSummary.showing_transactions
+      };
+    } else {
+      // Direct response (like web search results)
+      finalAnswer = responseMessage.content;
+      responseMetadata = {
+        type: "direct_response"
       };
 
-      // If there are citations or URLs in the response, include them
-      const urlMatch = finalResponse.choices[0].message.content.match(/\[([^\]]+)\]\(([^)]+)\)/g);
+      // Extract citations if they exist
+      const urlMatch = responseMessage.content.match(/\[([^\]]+)\]\(([^)]+)\)/g);
       if (urlMatch) {
-        formattedResponse.citations = urlMatch.map(citation => {
+        responseMetadata.citations = urlMatch.map(citation => {
           const [_, text, url] = citation.match(/\[([^\]]+)\]\(([^)]+)\)/);
           return { text, url };
         });
       }
-
-      return res.json(formattedResponse);
-
     }
 
-    // If no function call was needed, return the direct response with metadata
+    // Return consistent response format
     return res.json({
       success: true,
-      answer: responseMessage.content,
-      metadata: {
-        type: "direct_response"
-      }
+      answer: finalAnswer,
+      metadata: responseMetadata
     });
 
   } catch (err) {
