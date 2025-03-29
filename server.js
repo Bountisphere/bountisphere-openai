@@ -167,13 +167,27 @@ app.post('/assistant', async (req, res) => {
       const transactions = bubbleResponse.data?.response?.results || [];
       console.log(`Retrieved ${transactions.length} transactions from Bubble.`);
 
+      // Limit and summarize transactions to reduce token usage
+      const MAX_TRANSACTIONS = 50;
+      const limitedTransactions = transactions.slice(0, MAX_TRANSACTIONS);
+      
+      // Create a summary if we limited transactions
+      const transactionSummary = {
+        total_transactions: transactions.length,
+        showing_transactions: limitedTransactions.length,
+        transactions: limitedTransactions,
+        note: transactions.length > MAX_TRANSACTIONS ? 
+          `Note: Only showing ${MAX_TRANSACTIONS} most recent transactions out of ${transactions.length} total transactions to stay within API limits.` : 
+          undefined
+      };
+
       // Get final response with transaction data
       const finalResponse = await openai.chat.completions.create({
         model: "gpt-4",
         messages: [
           {
             role: "system",
-            content: "You are the Bountisphere Money Coach. Help users understand their transactions and financial patterns."
+            content: `You are the Bountisphere Money Coach. The current user's ID is ${userId}. Help users understand their transactions and financial patterns. ${transactionSummary.note || ''}`
           },
           {
             role: "user",
@@ -187,7 +201,7 @@ app.post('/assistant', async (req, res) => {
           {
             role: "function",
             name: "get_user_transactions",
-            content: JSON.stringify(transactions)
+            content: JSON.stringify(transactionSummary)
           }
         ]
       });
