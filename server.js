@@ -167,17 +167,32 @@ app.post('/assistant', async (req, res) => {
       const transactions = bubbleResponse.data?.response?.results || [];
       console.log(`Retrieved ${transactions.length} transactions from Bubble.`);
 
-      // Limit and summarize transactions to reduce token usage
+      // Filter out pending transactions and simplify transaction objects
+      const simplifiedTransactions = transactions
+        .filter(t => t.is_pending !== "yes")
+        .map(t => ({
+          account: t.Account,
+          bank: t.Bank,
+          amount: t.Amount,
+          date: t.Date,
+          day: t["Date / Day of Month"],
+          month: t.Month,
+          year: t.Year,
+          merchant: t["Merchant Name"],
+          category: t["Category Description"]
+        }));
+
+      // Limit transactions to reduce token usage
       const MAX_TRANSACTIONS = 50;
-      const limitedTransactions = transactions.slice(0, MAX_TRANSACTIONS);
+      const limitedTransactions = simplifiedTransactions.slice(0, MAX_TRANSACTIONS);
       
       // Create a summary if we limited transactions
       const transactionSummary = {
-        total_transactions: transactions.length,
+        total_transactions: simplifiedTransactions.length,
         showing_transactions: limitedTransactions.length,
         transactions: limitedTransactions,
-        note: transactions.length > MAX_TRANSACTIONS ? 
-          `Note: Only showing ${MAX_TRANSACTIONS} most recent transactions out of ${transactions.length} total transactions to stay within API limits.` : 
+        note: simplifiedTransactions.length > MAX_TRANSACTIONS ? 
+          `Note: Only showing ${MAX_TRANSACTIONS} most recent transactions out of ${simplifiedTransactions.length} total transactions to stay within API limits.` : 
           undefined
       };
 
