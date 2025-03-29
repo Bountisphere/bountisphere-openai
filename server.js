@@ -221,16 +221,36 @@ app.post('/assistant', async (req, res) => {
         ]
       });
 
-      return res.json({
+      // Format the response based on content type
+      const formattedResponse = {
         success: true,
-        answer: finalResponse.choices[0].message.content
-      });
+        answer: finalResponse.choices[0].message.content,
+        metadata: {
+          total_transactions: transactionSummary.total_transactions,
+          shown_transactions: transactionSummary.showing_transactions
+        }
+      };
+
+      // If there are citations or URLs in the response, include them
+      const urlMatch = finalResponse.choices[0].message.content.match(/\[([^\]]+)\]\(([^)]+)\)/g);
+      if (urlMatch) {
+        formattedResponse.citations = urlMatch.map(citation => {
+          const [_, text, url] = citation.match(/\[([^\]]+)\]\(([^)]+)\)/);
+          return { text, url };
+        });
+      }
+
+      return res.json(formattedResponse);
+
     }
 
-    // If no function call was needed, return the direct response
+    // If no function call was needed, return the direct response with metadata
     return res.json({
       success: true,
-      answer: responseMessage.content
+      answer: responseMessage.content,
+      metadata: {
+        type: "direct_response"
+      }
     });
 
   } catch (err) {
