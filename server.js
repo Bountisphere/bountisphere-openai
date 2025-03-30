@@ -1,6 +1,6 @@
 import express from 'express';
 import bodyParser from 'body-parser';
-import { OpenAI } from 'openai';
+import OpenAI from 'openai';
 import fetch from 'node-fetch';
 import dotenv from 'dotenv';
 // Trigger redeploy - no logic change
