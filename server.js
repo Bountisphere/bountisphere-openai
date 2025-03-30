@@ -11,77 +11,83 @@ app.use(bodyParser.json());
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
-const ASSISTANT_ID = process.env.ASSISTANT_ID;
-const BUBBLE_API_KEY = process.env.BUBBLE_API_KEY || 'b14c2547e2d20dadfb22a8a695849146';
-const BUBBLE_URL = 'https://app.bountisphere.com/api/1.1/obj/transactions';
-
+const MODEL = 'gpt-4o-mini';
+const BUBBLE_API_KEY = process.env.BUBBLE_API_KEY;
+const BUBBLE_URL = process.env.BUBBLE_API_URL;
 const DEFAULT_USER_ID = '1735159562002x959413891769328900';
 
-// ✅ Create a thread for new chats
-app.post('/create-thread', async (req, res) => {
-  try {
-    const thread = await openai.beta.threads.create();
-    console.log('🧵 Created thread:', thread.id);
-    res.json({ threadId: thread.id });
-  } catch (err) {
-    console.error('Error creating thread:', err);
-    res.status(500).json({ error: 'Failed to create thread' });
+// Function schema
+const tools = [{
+  type: 'function',
+  function: {
+    name: 'get_transactions',
+    description: 'Get a list of transactions for the user between two dates.',
+    parameters: {
+      type: 'object',
+      properties: {
+        start_date: {
+          type: 'string',
+          description: 'Start date in YYYY-MM-DD format.'
+        },
+        end_date: {
+          type: 'string',
+          description: 'End date in YYYY-MM-DD format.'
+        }
+      },
+      required: ['start_date', 'end_date'],
+      additionalProperties: false
+    }
   }
-});
+}];
 
-// ✅ Main endpoint to send user message and get assistant reply
+// ✅ POST /ask — Send user message to OpenAI and handle function calling
 app.post('/ask', async (req, res) => {
   const { userMessage, threadId } = req.body;
 
   try {
-    console.log('[Step 1] User message:', userMessage);
-
     const initialResponse = await openai.responses.create({
-      assistant_id: ASSISTANT_ID,
-      thread_id: threadId,
-      input: [{ role: 'user', content: userMessage }]
+      model: MODEL,
+      input: [{ role: 'user', content: userMessage }],
+      tools,
+      tool_choice: 'auto',
+      // Not using thread here yet because /v1/responses doesn't support Assistants-style threads
     });
 
-    const toolCalls = initialResponse.required_action?.submit_tool_outputs?.tool_calls;
-
-    if (toolCalls?.length > 0) {
-      const toolCall = toolCalls[0];
-      const args = JSON.parse(toolCall.function.arguments);
-
-      console.log('[Step 2] Tool call received:', toolCall.function.name, args);
-
-      const transactions = await fetchTransactionsFromBubble(args.start_date, args.end_date);
-
-      const followUp = await openai.responses.create({
-        assistant_id: ASSISTANT_ID,
-        thread_id: threadId,
-        previous_response_id: initialResponse.id,
-        tool_outputs: [
-          {
-            tool_call_id: toolCall.id,
-            output: JSON.stringify(transactions)
-          }
-        ]
-      });
-
-      const finalMessage = followUp.content?.[0]?.text?.value || '[No assistant response]';
-      console.log('[Step 3] Assistant reply:', finalMessage);
-      return res.json({ message: finalMessage });
+    const toolCall = initialResponse.output?.find(item => item.type === 'function_call');
+    if (!toolCall) {
+      const textResponse = initialResponse.output?.[0]?.text || '[No assistant reply]';
+      return res.json({ message: textResponse });
     }
 
-    const message = initialResponse.content?.[0]?.text?.value || '[No direct assistant reply]';
-    return res.json({ message });
+    const args = JSON.parse(toolCall.arguments);
+    console.log('[Tool Call Received]', toolCall.name, args);
+
+    const result = await fetchTransactionsFromBubble(args.start_date, args.end_date);
+
+    const followUp = await openai.responses.create({
+      model: MODEL,
+      input: [
+        toolCall,
+        {
+          type: 'function_call_output',
+          call_id: toolCall.call_id,
+          output: JSON.stringify(result)
+        }
+      ],
+      tools
+    });
+
+    const finalResponse = followUp.output?.[0]?.text || '[No assistant follow-up]';
+    return res.json({ message: finalResponse });
 
   } catch (err) {
-    console.error('Error in /ask:', err);
-    res.status(500).json({ error: err.message || 'Internal server error' });
+    console.error('❌ Error in /ask:', err);
+    return res.status(500).json({ error: err.message || 'Unexpected error' });
   }
 });
 
-// ✅ Helper: Fetch transactions from Bubble
+// ✅ Fetch transactions from Bubble
 async function fetchTransactionsFromBubble(startDate, endDate) {
-  console.log(`[Fetching transactions from ${startDate} to ${endDate}]`);
-
   const constraints = [
     { key: 'Account Holder', constraint_type: 'equals', value: DEFAULT_USER_ID },
     { key: 'Date', constraint_type: 'greater than', value: startDate },
@@ -114,4 +120,4 @@ async function fetchTransactionsFromBubble(startDate, endDate) {
 }
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`🚀 Server running on http://localhost:${PORT}`));
+app.listen(PORT, () => console.log(`🚀 Server running at http://localhost:${PORT}`));
