@@ -3,7 +3,6 @@ import bodyParser from 'body-parser';
 import OpenAI from 'openai';
 import fetch from 'node-fetch';
 import dotenv from 'dotenv';
-// just to redeploy
 
 dotenv.config();
 
@@ -17,7 +16,6 @@ const BUBBLE_API_KEY = process.env.BUBBLE_API_KEY;
 const BUBBLE_URL = process.env.BUBBLE_API_URL;
 const DEFAULT_USER_ID = '1735159562002x959413891769328900';
 
-// ✅ Flattened tool schema for /v1/responses API
 const tools = [{
   type: 'function',
   name: 'get_transactions',
@@ -39,7 +37,6 @@ const tools = [{
   }
 }];
 
-// ✅ POST /ask — Entry point from Bubble
 app.post('/ask', async (req, res) => {
   const { userMessage, userId } = req.body;
   const targetUserId = userId || DEFAULT_USER_ID;
@@ -62,10 +59,12 @@ app.post('/ask', async (req, res) => {
     console.log('[Tool Call Received]', toolCall.name, args);
 
     const result = await fetchTransactionsFromBubble(args.start_date, args.end_date, targetUserId);
+    console.log('[Transaction Result]', result);
 
     const followUp = await openai.responses.create({
       model: MODEL,
       input: [
+        { role: 'user', content: userMessage },
         toolCall,
         {
           type: 'function_call_output',
@@ -76,7 +75,13 @@ app.post('/ask', async (req, res) => {
       tools
     });
 
-    const finalResponse = followUp.output?.[0]?.text || '[No assistant follow-up]';
+    const finalResponse = followUp.output?.[0]?.text;
+    if (!finalResponse) {
+      return res.json({
+        message: "I didn’t find any transactions during that period. Try a different date range?"
+      });
+    }
+
     return res.json({ message: finalResponse });
 
   } catch (err) {
@@ -85,7 +90,6 @@ app.post('/ask', async (req, res) => {
   }
 });
 
-// ✅ Fetch transactions from Bubble
 async function fetchTransactionsFromBubble(startDate, endDate, userId) {
   const constraints = [
     { key: 'Account Holder', constraint_type: 'equals', value: userId },
@@ -94,7 +98,6 @@ async function fetchTransactionsFromBubble(startDate, endDate, userId) {
   ];
 
   const url = `${BUBBLE_URL}?constraints=${encodeURIComponent(JSON.stringify(constraints))}`;
-  console.log('[Bubble API URL]', url); // 👈 Add this line
 
   const response = await fetch(url, {
     headers: {
