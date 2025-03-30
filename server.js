@@ -67,6 +67,12 @@ app.post('/ask', async (req, res) => {
     const result = await fetchTransactionsFromBubble(args.start_date, args.end_date, targetUserId);
     console.log('[Transaction Result]', result);
 
+    // ✅ Debugging: Log follow-up input before calling OpenAI
+    console.log('[Follow-up Response Input]', {
+      call_id: toolCall.call_id,
+      output: JSON.stringify(result)
+    });
+
     const followUp = await openai.responses.create({
       model: MODEL,
       input: [
@@ -85,6 +91,7 @@ app.post('/ask', async (req, res) => {
     const finalResponse = textItem?.text;
 
     if (!finalResponse) {
+      console.warn('[No final assistant reply returned after function output]');
       return res.json({
         message: `You don’t seem to have any transactions between ${args.start_date} and ${args.end_date}. Want to try a different date range?`
       });
