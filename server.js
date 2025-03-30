@@ -94,6 +94,7 @@ async function fetchTransactionsFromBubble(startDate, endDate, userId) {
   ];
 
   const url = `${BUBBLE_URL}?constraints=${encodeURIComponent(JSON.stringify(constraints))}`;
+  console.log('[Bubble API URL]', url); // 👈 Add this line
 
   const response = await fetch(url, {
     headers: {
