@@ -1,367 +1,131 @@
+// server.js
 import express from 'express';
+import bodyParser from 'body-parser';
 import { OpenAI } from 'openai';
+import fetch from 'node-fetch';
 import dotenv from 'dotenv';
-import cors from 'cors';
 
-// Load environment variables
 dotenv.config();
 
-// Initialize OpenAI client
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY
-});
-
-// Initialize Express app
 const app = express();
-app.use(cors());
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+app.use(bodyParser.json());
 
-// Add request logging middleware
-app.use((req, res, next) => {
-  console.log(`${new Date().toISOString()} ${req.method} ${req.url}`);
-  console.log('Request body:', JSON.stringify(req.body, null, 2));
-  next();
-});
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
-// Define the function (tool) schema
-const tools = [
-  {
-    type: "function",
-    name: "get_user_transactions",
-    description: "Get transactions for a user within a date range, optionally filtered by bank and account",
-    parameters: {
-      type: "object",
-      properties: {
-        userId: {
-          type: "string",
-          description: "The user ID to get transactions for"
-        },
-        startDate: {
-          type: ["string", "null"],
-          description: "Start date in YYYY-MM-DD format"
-        },
-        endDate: {
-          type: ["string", "null"],
-          description: "End date in YYYY-MM-DD format"
-        },
-        bank: {
-          type: ["string", "null"],
-          description: "Optional bank name to filter by (e.g., 'Capital One', 'Chase')"
-        },
-        account: {
-          type: ["string", "null"],
-          description: "Optional account name to filter by (e.g., 'Quicksilver', '360 Checking')"
-        }
-      },
-      required: ["userId"],
-      additionalProperties: false
-    }
-  }
-];
+const ASSISTANT_ID = process.env.ASSISTANT_ID;
+const BUBBLE_API_KEY = 'b14c2547e2d20dadfb22a8a695849146';
+const BUBBLE_USER_ID = '1735159562002x959413891769328900';
+const BUBBLE_URL = 'https://app.bountisphere.com/api/1.1/obj/transactions';
 
-// Health check endpoint
-app.get('/', (req, res) => {
-  res.json({
-    status: 'ok',
-    message: 'Bountisphere AI server is running!',
-    environment: {
-      bubbleApiConfigured: !!process.env.BUBBLE_API_URL && !!process.env.BUBBLE_API_KEY,
-      openaiApiConfigured: !!process.env.OPENAI_API_KEY
-    }
-  });
-});
+app.post('/ask', async (req, res) => {
+  const { userMessage, threadId } = req.body;
 
-// Assistant endpoint
-app.post('/assistant', async (req, res) => {
   try {
-    console.log('\n=== Starting new request ===');
-    console.log('Request body:', req.body);
-    
-    const { input, userId } = req.body;
-    if (!input || !userId) {
-      return res.status(400).json({
-        error: "Missing required parameters",
-        details: {
-          error: {
-            message: `Missing required parameter: ${!input ? 'input' : 'userId'}`,
-            type: "invalid_request_error",
-            param: !input ? 'input' : 'userId',
-            code: "missing_required_parameter"
-          }
-        }
-      });
-    }
+    console.log('[Step 1] Sending message to OpenAI:', userMessage);
 
-    console.log('\n=== Making initial OpenAI request ===');
-    // Create initial response using OpenAI Responses API
-    const response = await openai.responses.create({
-      model: "gpt-4o",
-      input: input,
-      tools: tools
-    });
-
-    console.log('\n=== OpenAI Response ===');
-    console.log('Response:', JSON.stringify(response, null, 2));
-
-    let finalAnswer = '';
-    let responseMetadata = {};
-
-    // Process function calls and messages
-    for (const item of response.output) {
-      if (item.type === 'message') {
-        finalAnswer = item.content;
-      } else if (item.type === 'function_call' && item.name === 'get_user_transactions') {
-        try {
-          const functionArgs = JSON.parse(item.arguments);
-          functionArgs.userId = functionArgs.userId || userId;
-
-          // Get transactions from Bubble API
-          const transactions = await getBubbleTransactions(
-            functionArgs.userId,
-            functionArgs.startDate,
-            functionArgs.endDate,
-            functionArgs.bank,
-            functionArgs.account
-          );
-
-          // Process transactions
-          const simplifiedTransactions = transactions
-            .filter(t => t.is_pending !== "yes")
-            .map(t => ({
-              account: t.Account,
-              bank: t.Bank,
-              amount: t.Amount,
-              date: t.Date,
-              merchant: t["Merchant Name"],
-              category: t["Category Description"]
-            }));
-
-          // Limit transactions
-          const MAX_TRANSACTIONS = 50;
-          const limitedTransactions = simplifiedTransactions.slice(0, MAX_TRANSACTIONS);
-          
-          // Create summary
-          const transactionSummary = {
-            total_transactions: simplifiedTransactions.length,
-            showing_transactions: limitedTransactions.length,
-            transactions: limitedTransactions,
-            note: simplifiedTransactions.length > MAX_TRANSACTIONS ? 
-              `Note: Only showing ${MAX_TRANSACTIONS} most recent transactions out of ${simplifiedTransactions.length} total transactions.` : 
-              undefined
-          };
-
-          // Get final response with transaction data
-          const finalResponse = await openai.responses.create({
-            model: "gpt-4o",
-            input: input,
-            tools: tools,
-            function_results: [
-              {
-                name: "get_user_transactions",
-                content: JSON.stringify(transactionSummary)
-              }
-            ]
-          });
-
-          // Extract final answer
-          for (const output of finalResponse.output) {
-            if (output.type === 'message') {
-              finalAnswer = output.content;
-              break;
+    const initialResponse = await openai.beta.responses.create({
+      assistant_id: ASSISTANT_ID,
+      thread_id: threadId,
+      input: [{ role: 'user', content: userMessage }],
+      tools: [
+        {
+          type: 'function',
+          function: {
+            name: 'getTransactions',
+            description: 'Retrieve Bountisphere transactions for a date range',
+            parameters: {
+              type: 'object',
+              properties: {
+                start_date: { type: 'string', format: 'date-time' },
+                end_date: { type: 'string', format: 'date-time' }
+              },
+              required: ['start_date', 'end_date']
             }
           }
-
-          responseMetadata = {
-            type: "transaction_response",
-            total_transactions: transactionSummary.total_transactions,
-            shown_transactions: transactionSummary.showing_transactions
-          };
-        } catch (error) {
-          console.error('\n=== Error processing transactions ===');
-          console.error('Error:', error);
-          finalAnswer = "I apologize, but I encountered an error while trying to fetch your transactions. Please try again or contact support if the issue persists.";
         }
-      }
+      ]
+    });
+
+    const toolCalls = initialResponse.required_action?.submit_tool_outputs?.tool_calls;
+
+    if (toolCalls && toolCalls.length > 0) {
+      const toolCall = toolCalls[0];
+      const args = JSON.parse(toolCall.function.arguments);
+      console.log('[Step 2] Tool call received. Args:', args);
+
+      const transactions = await fetchTransactionsFromBubble(args.start_date, args.end_date);
+
+      const followUp = await openai.beta.responses.create({
+        assistant_id: ASSISTANT_ID,
+        thread_id: threadId,
+        previous_response_id: initialResponse.id,
+        tool_outputs: [
+          {
+            tool_call_id: toolCall.id,
+            output: JSON.stringify(transactions)
+          }
+        ]
+      });
+
+      const reply = followUp.content?.[0]?.text?.value || '[No response from assistant]';
+      console.log('[Step 3] Final assistant message:', reply);
+      return res.json({ message: reply });
+    } else {
+      const directReply = initialResponse.content?.[0]?.text?.value || '[No direct assistant message]';
+      return res.json({ message: directReply });
     }
-
-    // Return the final response
-    return res.json({
-      success: true,
-      data: {
-        answer: finalAnswer,
-        metadata: responseMetadata
-      }
-    });
-
   } catch (err) {
-    console.error('\n=== Error in /assistant endpoint ===');
-    console.error('Error:', err);
-    return res.status(500).json({
-      success: false,
-      error: "Assistant failed",
-      details: err.message
-    });
+    console.error('Error in /ask:', err);
+    return res.status(500).json({ error: err.message });
   }
 });
 
-function inferAccountType(transaction) {
-  let accountType = "Unknown";
-  
-  // First check Account field
-  if (transaction.Account) {
-    const accountLower = transaction.Account.toLowerCase();
-    if (accountLower.includes('ckg') || accountLower.includes('checking')) {
-      accountType = 'Checking';
-    } else if (accountLower.includes('sav') || accountLower.includes('savings')) {
-      accountType = 'Savings';
-    } else if (accountLower.includes('cc') || accountLower.includes('credit')) {
-      accountType = 'Credit Card';
-    }
-  }
+// 🔄 Fetch transactions from Bubble with constraints
+async function fetchTransactionsFromBubble(startDate, endDate) {
+  console.log(`[Fetching transactions from ${startDate} to ${endDate}]`);
 
-  // If still unknown, check Description
-  if (accountType === "Unknown" && transaction.Description) {
-    const descLower = transaction.Description.toLowerCase();
-    
-    // Credit card indicators
-    if (descLower.includes('credit card') || 
-        descLower.includes('creditcard') ||
-        descLower.includes('card payment') ||
-        descLower.includes('card ending in')) {
-      accountType = 'Credit Card';
-    }
-    
-    // Checking indicators
-    else if (descLower.includes('checking') ||
-             descLower.includes('debit card') ||
-             descLower.includes('atm') ||
-             descLower.includes('direct deposit') ||
-             descLower.includes('dir dep')) {
-      accountType = 'Checking';
-    }
-    
-    // Savings indicators
-    else if (descLower.includes('savings') ||
-             descLower.includes('interest payment') ||
-             descLower.includes('interest earned')) {
-      accountType = 'Savings';
-    }
-  }
-
-  // If still unknown, try to infer from transaction type/category
-  if (accountType === "Unknown" && transaction.Category) {
-    const categoryLower = transaction.Category.toLowerCase();
-    
-    // Credit card likely categories
-    if (categoryLower.includes('credit card payment') ||
-        categoryLower.includes('card payment')) {
-      accountType = 'Credit Card';
-    }
-    
-    // Checking likely categories
-    else if (categoryLower.includes('atm') ||
-             categoryLower.includes('direct deposit') ||
-             categoryLower.includes('transfer')) {
-      accountType = 'Checking';
-    }
-    
-    // Savings likely categories
-    else if (categoryLower.includes('interest') ||
-             categoryLower.includes('savings')) {
-      accountType = 'Savings';
-    }
-  }
-
-  return accountType;
-}
-
-function formatTransactionForOpenAI(transaction) {
-  const bank = transaction.Bank || "Unknown Bank";
-  const account = transaction.Account || "Unknown Account";
-  const description = transaction.Description || "";
-  const amount = transaction.Amount || 0;
-  const date = transaction.Date || "";
-  
-  return {
-    date,
-    description: `${bank} ${account}: ${description}`,
-    amount
-  };
-}
-
-async function getBubbleTransactions(userId, startDate, endDate, bank, account) {
   const constraints = [
     {
-      key: "Account Holder",
-      constraint_type: "equals",
-      value: userId
+      key: 'Account Holder',
+      constraint_type: 'equals',
+      value: BUBBLE_USER_ID
+    },
+    {
+      key: 'Date',
+      constraint_type: 'greater than',
+      value: startDate
+    },
+    {
+      key: 'Date',
+      constraint_type: 'less than',
+      value: endDate
     }
   ];
 
-  if (startDate) {
-    constraints.push({
-      key: "Date",
-      constraint_type: "greater than",
-      value: new Date(startDate).toISOString()
-    });
-  }
+  const url = `${BUBBLE_URL}?constraints=${encodeURIComponent(JSON.stringify(constraints))}`;
 
-  if (endDate) {
-    constraints.push({
-      key: "Date",
-      constraint_type: "less than",
-      value: new Date(endDate).toISOString()
-    });
-  }
-
-  if (bank) {
-    constraints.push({
-      key: "Bank",
-      constraint_type: "equals",
-      value: bank
-    });
-  }
-
-  if (account) {
-    constraints.push({
-      key: "Account",
-      constraint_type: "equals",
-      value: account
-    });
-  }
-
-  const queryParams = new URLSearchParams({
-    constraints: JSON.stringify(constraints)
-  });
-
-  const url = `${process.env.BUBBLE_API_URL}/transactions?${queryParams}`;
-  console.log("Fetching transactions from:", url);
-  
   const response = await fetch(url, {
     headers: {
-      'Authorization': `Bearer ${process.env.BUBBLE_API_KEY}`,
-      'Content-Type': 'application/json'
+      Authorization: `Bearer ${BUBBLE_API_KEY}`
     }
   });
 
-  if (!response.ok) {
-    throw {
-      statusCode: response.status,
-      body: await response.json()
-    };
+  const data = await response.json();
+
+  if (!data || !data.response || !data.response.results) {
+    throw new Error('No transaction data returned from Bubble');
   }
 
-  const data = await response.json();
-  return data.response.results;
+  return {
+    totalCount: data.response.results.length,
+    transactions: data.response.results.map((tx) => ({
+      date: tx.Date,
+      amount: tx.Amount,
+      merchant: tx['Merchant Name'] || tx.Description || 'Unknown',
+      category: tx['Category Description'] || tx['Category (Old)'] || 'Uncategorized'
+    }))
+  };
 }
 
-// Start server
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, '0.0.0.0', () => {
-  console.log(`🚀 Bountisphere AI server running at http://localhost:${PORT}`);
-  console.log('Environment Configuration:');
-  console.log('- BUBBLE_API_URL:', process.env.BUBBLE_API_URL);
-  console.log('- OpenAI API Key:', process.env.OPENAI_API_KEY ? '✓ Set' : '✗ Missing');
-  console.log('- Bubble API Key:', process.env.BUBBLE_API_KEY ? '✓ Set' : '✗ Missing');
-});
+app.listen(PORT, () => console.log(`Server running at http://localhost:${PORT}`));
