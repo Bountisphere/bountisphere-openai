@@ -57,7 +57,7 @@ app.post('/ask', async (req, res) => {
 
     const toolCall = initialResponse.output?.find(item => item.type === 'function_call');
     if (!toolCall) {
-      const textResponse = initialResponse.output?.find(item => item.content)?.content?.[0]?.text || '[No assistant reply]';
+      const textResponse = initialResponse.output?.find(item => item.type === 'text')?.text || '[No assistant reply]';
       return res.json({ message: textResponse });
     }
 
@@ -66,12 +66,6 @@ app.post('/ask', async (req, res) => {
 
     const result = await fetchTransactionsFromBubble(args.start_date, args.end_date, targetUserId);
     console.log('[Transaction Result]', result);
-
-    // ✅ Debugging: Log follow-up input before calling OpenAI
-    console.log('[Follow-up Response Input]', {
-      call_id: toolCall.call_id,
-      output: JSON.stringify(result)
-    });
 
     const followUp = await openai.responses.create({
       model: MODEL,
@@ -87,17 +81,16 @@ app.post('/ask', async (req, res) => {
       tools
     });
 
-    const textItem = followUp.output?.find(item => item.content)?.content?.find(c => c.type === 'output_text');
-    const finalResponse = textItem?.text;
+    const finalText = followUp.output?.find(item => item.type === 'text')?.text;
+    console.log('[Final Response]', finalText);
 
-    if (!finalResponse) {
-      console.warn('[No final assistant reply returned after function output]');
+    if (!finalText) {
       return res.json({
         message: `You don’t seem to have any transactions between ${args.start_date} and ${args.end_date}. Want to try a different date range?`
       });
     }
 
-    return res.json({ message: finalResponse });
+    return res.json({ message: finalText });
 
   } catch (err) {
     console.error('❌ Error in /ask:', err);
