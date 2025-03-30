@@ -1,7 +1,6 @@
 import express from 'express';
 import axios from 'axios';
 import dotenv from 'dotenv';
-import OpenAI from 'openai';
 
 // Load environment variables
 dotenv.config();
@@ -10,23 +9,18 @@ dotenv.config();
 const app = express();
 app.use(express.json());
 
-// Initialize OpenAI client
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY
-});
-
 // Define the function (tool) schema
 const tools = [
   {
     type: "function",
+    description: "Return the user's recent financial transactions",
     name: "get_user_transactions",
-    description: "Fetch a user's transactions from the Bountisphere Bubble API",
     parameters: {
       type: "object",
       properties: {
         userId: {
           type: "string",
-          description: "The user ID whose transactions we need to fetch"
+          description: "The unique ID of the Bountisphere user"
         },
         startDate: {
           type: "string",
@@ -42,36 +36,7 @@ const tools = [
   }
 ];
 
-// Rate limiting middleware
-const rateLimit = {
-  windowMs: 60 * 1000, // 1 minute
-  maxRequests: 10,
-  current: 0,
-  resetTime: Date.now() + 60 * 1000
-};
-
-function rateLimiter(req, res, next) {
-  const now = Date.now();
-  if (now > rateLimit.resetTime) {
-    rateLimit.current = 0;
-    rateLimit.resetTime = now + rateLimit.windowMs;
-  }
-
-  if (rateLimit.current >= rateLimit.maxRequests) {
-    return res.status(429).json({
-      error: 'Rate limit exceeded. Please try again in a minute.',
-      details: 'Too many requests in this time window.'
-    });
-  }
-
-  rateLimit.current++;
-  next();
-}
-
-// Apply rate limiting to all routes
-app.use(rateLimiter);
-
-// Health check route
+// Health check endpoint
 app.get('/', (req, res) => {
   res.json({
     status: 'ok',
@@ -83,22 +48,12 @@ app.get('/', (req, res) => {
   });
 });
 
-// Helper function to compute default date range (last 12 months)
-function getDefaultDateRange() {
-  const today = new Date();
-  const effectiveEndDate = today.toISOString().split('T')[0];
-  const lastYear = new Date(today);
-  lastYear.setFullYear(today.getFullYear() - 1);
-  const effectiveStartDate = lastYear.toISOString().split('T')[0];
-  return { effectiveStartDate, effectiveEndDate };
-}
-
 // Assistant endpoint
 app.post('/assistant', async (req, res) => {
   try {
     const { input, userId } = req.body;
     if (!input || !userId) {
-      return res.status(400).json({ 
+      return res.status(400).json({
         error: "Missing required parameters",
         details: {
           error: {
@@ -111,7 +66,7 @@ app.post('/assistant', async (req, res) => {
       });
     }
 
-    // Create initial response using /responses API
+    // Create initial response using OpenAI Responses API
     const response = await axios.post('https://api.openai.com/v1/responses', {
       instructions: `You are the Bountisphere Money Coach. The current user's ID is ${userId}. When analyzing transactions, automatically use this ID to fetch the data. Help users understand their transactions and financial patterns.`,
       model: "gpt-4o-mini-2024-07-18",
@@ -147,31 +102,28 @@ app.post('/assistant', async (req, res) => {
       // Add userId if not provided in the function call
       functionArgs.userId = functionArgs.userId || userId;
 
+      // Get default date range (last 12 months)
+      const endDate = new Date().toISOString().split('T')[0];
+      const startDate = new Date(Date.now() - 365 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+
       // Prepare Bubble API request
       const constraints = [
         { 
           "key": "Account Holder", 
           "constraint_type": "equals", 
           "value": functionArgs.userId 
+        },
+        {
+          "key": "Date",
+          "constraint_type": "greater than",
+          "value": (functionArgs.startDate || startDate) + "T00:00:00.000Z"
+        },
+        {
+          "key": "Date",
+          "constraint_type": "less than",
+          "value": (functionArgs.endDate || endDate) + "T00:00:00.000Z"
         }
       ];
-
-      // Add date constraints if provided
-      if (functionArgs.startDate) {
-        constraints.push({ 
-          "key": "Date", 
-          "constraint_type": "greater than", 
-          "value": functionArgs.startDate + "T00:00:00.000Z"
-        });
-      }
-
-      if (functionArgs.endDate) {
-        constraints.push({ 
-          "key": "Date", 
-          "constraint_type": "less than", 
-          "value": functionArgs.endDate + "T00:00:00.000Z"
-        });
-      }
 
       // Call Bubble API
       const bubbleURL = `${process.env.BUBBLE_API_URL}/transactions?constraints=${encodeURIComponent(JSON.stringify(constraints))}`;
@@ -218,7 +170,7 @@ app.post('/assistant', async (req, res) => {
 
       // Get final response with transaction data
       const finalResponse = await axios.post('https://api.openai.com/v1/responses', {
-        instructions: `You are the Bountisphere Money Coach. The current user's ID is ${userId}. Help users understand their transactions and financial patterns. ${transactionSummary.note || ''}`,
+        instructions: `You are the Bountisphere Money Coach. Help users understand their transactions and financial patterns. ${transactionSummary.note || ''}`,
         model: "gpt-4o-mini-2024-07-18",
         text: { format: { type: "text" } },
         tools: tools,
@@ -267,62 +219,31 @@ app.post('/assistant', async (req, res) => {
       }
     }
 
-    // Return consistent response format
+    // Return data in a format easy for Bubble to handle
     return res.json({
       success: true,
-      answer: finalAnswer,
-      metadata: responseMetadata
+      data: {
+        answer: finalAnswer,
+        metadata: responseMetadata
+      }
     });
 
   } catch (err) {
     console.error("❌ /assistant error:", err?.response?.data || err.message);
     return res.status(500).json({
+      success: false,
       error: "Assistant failed",
       details: err?.response?.data || err.message
     });
   }
 });
 
-// Start server with proper error handling
+// Start server
 const PORT = process.env.PORT || 3000;
-
-const server = app.listen(PORT, '0.0.0.0', (error) => {
-  if (error) {
-    console.error('❌ Error starting server:', error);
-    process.exit(1);
-  }
+app.listen(PORT, '0.0.0.0', () => {
   console.log(`🚀 Bountisphere AI server running at http://localhost:${PORT}`);
-  
-  // Log environment configuration
   console.log('Environment Configuration:');
   console.log('- BUBBLE_API_URL:', process.env.BUBBLE_API_URL);
   console.log('- OpenAI API Key:', process.env.OPENAI_API_KEY ? '✓ Set' : '✗ Missing');
   console.log('- Bubble API Key:', process.env.BUBBLE_API_KEY ? '✓ Set' : '✗ Missing');
-});
-
-// Handle server errors
-server.on('error', (error) => {
-  if (error.code === 'EADDRINUSE') {
-    console.error(`❌ Port ${PORT} is already in use. Please try a different port or kill the process using this port.`);
-  } else {
-    console.error('❌ Server error:', error);
-  }
-  process.exit(1);
-});
-
-// Handle process termination
-process.on('SIGTERM', () => {
-  console.log('👋 SIGTERM received. Shutting down gracefully...');
-  server.close(() => {
-    console.log('✅ Server closed');
-    process.exit(0);
-  });
-});
-
-process.on('SIGINT', () => {
-  console.log('👋 SIGINT received. Shutting down gracefully...');
-  server.close(() => {
-    console.log('✅ Server closed');
-    process.exit(0);
-  });
 });
