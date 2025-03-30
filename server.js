@@ -96,16 +96,20 @@ Current logged in user is ${targetUserId}. Today's date is ${new Date().toDateSt
         toolCall,
         {
           type: 'tool_output',
-          tool_call_id: toolCall.call_id,
-          output: JSON.stringify(result)
+          call_id: toolCall.call_id,
+          output: result
         }
       ],
       instructions,
       tools
     });
 
+    console.log('[🧠 Follow-Up Response]', JSON.stringify(followUp, null, 2));
+
     const reply = followUp.output?.find(item => item.type === 'message');
-    const text = reply?.content?.find(c => c.type === 'output_text')?.text;
+    const text =
+      reply?.content?.find(c => c.type === 'output_text')?.text ||
+      reply?.content?.find(c => c.type === 'text')?.text;
 
     if (!text) {
       return res.json({
