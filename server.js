@@ -98,36 +98,51 @@ app.post('/assistant', async (req, res) => {
   try {
     const { input, userId } = req.body;
     if (!input || !userId) {
-      return res.status(400).json({ error: 'Missing "input" or "userId".' });
+      return res.status(400).json({ 
+        error: "Missing required parameters",
+        details: {
+          error: {
+            message: `Missing required parameter: ${!input ? 'input' : 'userId'}`,
+            type: "invalid_request_error",
+            param: !input ? 'input' : 'userId',
+            code: "missing_required_parameter"
+          }
+        }
+      });
     }
 
-    // Create initial response
-    const response = await openai.chat.completions.create({
-      model: "gpt-4",
-      messages: [
+    // Create initial response using /responses API
+    const response = await axios.post('https://api.openai.com/v1/responses', {
+      instructions: `You are the Bountisphere Money Coach. The current user's ID is ${userId}. When analyzing transactions, automatically use this ID to fetch the data. Help users understand their transactions and financial patterns.`,
+      model: "gpt-4o-mini-2024-07-18",
+      text: { format: { type: "text" } },
+      tools: tools,
+      output: [
         {
-          role: "system",
-          content: `You are the Bountisphere Money Coach. The current user's ID is ${userId}. When analyzing transactions, automatically use this ID to fetch the data. Help users understand their transactions and financial patterns.`
-        },
-        {
+          type: "message",
           role: "user",
           content: input
         }
-      ],
-      functions: tools,
-      function_call: "auto"
+      ]
+    }, {
+      headers: {
+        'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
+        'Content-Type': 'application/json'
+      }
     });
 
-    const responseMessage = response.choices[0].message;
+    // Find function call or message in the output
+    const functionCall = response.data.output.find(o => o.type === "function_call");
+    const messageOutput = response.data.output.find(o => o.type === "message");
 
-    // Initialize response object
+    // Initialize response variables
     let finalAnswer;
     let responseMetadata = {};
 
-    // Check if the model wants to call a function
-    if (responseMessage.function_call) {
-      // Get the function arguments
-      const functionArgs = JSON.parse(responseMessage.function_call.arguments);
+    // Check if we need to handle transactions
+    if (functionCall && functionCall.name === "get_user_transactions") {
+      // Parse the function arguments
+      const functionArgs = JSON.parse(functionCall.arguments);
       
       // Add userId if not provided in the function call
       functionArgs.userId = functionArgs.userId || userId;
@@ -227,8 +242,8 @@ app.post('/assistant', async (req, res) => {
       });
 
       // Extract the text response from the message output
-      const messageOutput = finalResponse.data.output.find(o => o.type === "message");
-      finalAnswer = messageOutput?.content[0]?.text || "Sorry, I couldn't analyze your transactions.";
+      const finalMessageOutput = finalResponse.data.output.find(o => o.type === "message");
+      finalAnswer = finalMessageOutput?.content[0]?.text || "Sorry, I couldn't analyze your transactions.";
       
       responseMetadata = {
         type: "transaction_response",
@@ -237,8 +252,7 @@ app.post('/assistant', async (req, res) => {
       };
     } else {
       // Direct response (like web search results)
-      const messageOutput = response.data.output.find(o => o.type === "message");
-      finalAnswer = messageOutput?.content[0]?.text || responseMessage.content;
+      finalAnswer = messageOutput?.content[0]?.text || "I couldn't process your request.";
       responseMetadata = {
         type: "direct_response"
       };
