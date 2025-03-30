@@ -19,17 +19,17 @@ const DEFAULT_USER_ID = '1735159562002x959413891769328900';
 const tools = [{
   type: 'function',
   name: 'get_transactions',
-  description: 'Get a list of transactions for the user between two dates.',
+  description: 'Retrieve user transaction history for budgeting purposes.',
   parameters: {
     type: 'object',
     properties: {
       start_date: {
         type: 'string',
-        description: 'Start date in YYYY-MM-DD format.'
+        description: 'Start date in YYYY-MM-DD format (inclusive).'
       },
       end_date: {
         type: 'string',
-        description: 'End date in YYYY-MM-DD format.'
+        description: 'End date in YYYY-MM-DD format (inclusive).'
       }
     },
     required: ['start_date', 'end_date'],
@@ -42,17 +42,22 @@ app.post('/ask', async (req, res) => {
   const targetUserId = userId || DEFAULT_USER_ID;
 
   try {
+    const inputMessages = [
+      { role: 'developer', content: 'You are a friendly and smart money coach. If a tool is defined and needed, call it. Otherwise, respond clearly.' },
+      { role: 'user', content: userMessage }
+    ];
+
     const initialResponse = await openai.responses.create({
       model: MODEL,
-      input: [{ role: 'user', content: userMessage }],
+      input: inputMessages,
       tools,
-      tool_choice: 'auto'
+      tool_choice: 'auto',
+      instructions: 'Help the user manage their finances. Use the function tool if transaction data is needed.'
     });
 
     const toolCall = initialResponse.output?.find(item => item.type === 'function_call');
     if (!toolCall) {
-      const textResponse = initialResponse.output?.[0]?.text || '[No assistant reply]';
-      console.log('[No function call triggered]', initialResponse.output);
+      const textResponse = initialResponse.output?.find(item => item.content)?.content?.[0]?.text || '[No assistant reply]';
       return res.json({ message: textResponse });
     }
 
@@ -65,6 +70,7 @@ app.post('/ask', async (req, res) => {
     const followUp = await openai.responses.create({
       model: MODEL,
       input: [
+        ...inputMessages,
         toolCall,
         {
           type: 'function_call_output',
@@ -75,10 +81,12 @@ app.post('/ask', async (req, res) => {
       tools
     });
 
-    const finalResponse = followUp.output?.[0]?.text;
+    const textItem = followUp.output?.find(item => item.content)?.content?.find(c => c.type === 'output_text');
+    const finalResponse = textItem?.text;
+
     if (!finalResponse) {
       return res.json({
-        message: "I didn’t find any transactions during that period. Try a different date range?"
+        message: `You don’t seem to have any transactions between ${args.start_date} and ${args.end_date}. Want to try a different date range?`
       });
     }
 
