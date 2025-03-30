@@ -20,7 +20,7 @@ const tools = [
   {
     type: 'function',
     name: 'get_user_transactions',
-    description: 'Return the user\'s recent financial transactions, including date, amount, category, and merchant.',
+    description: "Return the user's recent financial transactions, including date, amount, category, and merchant.",
     parameters: {
       type: 'object',
       properties: {
@@ -30,37 +30,15 @@ const tools = [
         },
         start_date: {
           type: 'string',
-          description: 'Start date in YYYY-MM-DD format (inclusive).'
+          description: 'Start date in YYYY-MM-DD format (inclusive)'
         },
         end_date: {
           type: 'string',
-          description: 'End date in YYYY-MM-DD format (inclusive).'
+          description: 'End date in YYYY-MM-DD format (inclusive)'
         }
       },
-      required: ['userId'],
+      required: ['userId', 'start_date', 'end_date'],
       additionalProperties: false
-    },
-    strict: true
-  },
-  {
-    type: 'file_search',
-    filters: null,
-    max_num_results: 20,
-    ranking_options: {
-      ranker: 'auto',
-      score_threshold: 0
-    },
-    vector_store_ids: ['vs_JScHftFeKAv35y4QHPz9QwMb']
-  },
-  {
-    type: 'web_search_preview',
-    search_context_size: 'medium',
-    user_location: {
-      type: 'approximate',
-      city: null,
-      country: 'US',
-      region: null,
-      timezone: null
     }
   }
 ];
@@ -70,77 +48,84 @@ app.post('/ask', async (req, res) => {
   const targetUserId = userId || DEFAULT_USER_ID;
 
   try {
-    const inputMessages = [
-      { role: 'developer', content: 'You are a friendly and smart money coach. If a tool is defined and needed, call it. Otherwise, respond clearly.' },
-      { role: 'user', content: userMessage }
+    const input = [
+      {
+        role: 'user',
+        content: userMessage
+      }
     ];
 
-    const initialResponse = await openai.responses.create({
+    const instructions = `
+You are the Bountisphere Money Coach — a friendly, supportive, and expert financial assistant.
+
+Your goal is to help users make better financial decisions by answering questions with the right tools.
+
+• If the question is about the user's **transactions, spending, or budgeting**, always call the \`get_user_transactions\` function first. Never answer these questions without seeing their transactions.
+
+• If the question is about how to use Bountisphere, app features, onboarding, or support topics, use the \`file_search\` tool to find answers in our documentation.
+
+• If the question is about **markets, the economy, inflation, investing trends, or external news**, use the \`web_search_preview\` tool to retrieve up-to-date information.
+
+Do not mix tools. Use only one tool per question. Prioritize accuracy and relevance.
+
+Current logged in user is ${targetUserId}. Today's date is ${new Date().toDateString()}.
+`.trim();
+
+    const initialResponse = await openai.beta.responses.create({
       model: MODEL,
-      input: inputMessages,
+      input,
+      instructions,
       tools,
-      tool_choice: 'auto',
-      instructions: `You are the Bountisphere Money Coach — a friendly, supportive, and expert financial assistant.\n\nYour goal is to help users make better financial decisions by answering questions with the right tools.\n\n• If the question is about the user's transactions, spending, or budgeting, always call the get_user_transactions function first. Never answer these questions without seeing their transactions.\n\n• If the question is about how to use Bountisphere, app features, onboarding, or support topics, use the file_search tool to find answers in our documentation.\n\n• If the question is about markets, the economy, inflation, investing trends, or external news, use the web_search_preview tool to retrieve up-to-date information.\n\nDo not mix tools. Use only one tool per question. Prioritize accuracy and relevance.\n\nCurrent logged in user is ${targetUserId}. Today's date is ${new Date().toDateString()}.`
+      tool_choice: 'auto'
     });
 
     const toolCall = initialResponse.output?.find(item => item.type === 'function_call');
-
     if (!toolCall) {
-      const textResponse = initialResponse.output
-        ?.find(item => item.type === 'message')
-        ?.content?.find(c => c.type === 'output_text')?.text;
-
-      return res.json({ message: textResponse || '[No assistant response]' });
+      const textResponse = initialResponse.output?.find(item => item.type === 'message')?.content?.[0]?.text;
+      return res.json({ message: textResponse || 'Sorry, I wasn’t able to generate a response.' });
     }
 
     const args = JSON.parse(toolCall.arguments);
-    console.log('[Tool Call Received]', toolCall.name, args);
+    const result = await fetchTransactionsFromBubble(args.start_date, args.end_date, args.userId);
+    console.log('[✅ Function Call Result]', result);
 
-    const result = await fetchTransactionsFromBubble(
-      args.start_date || '2025-01-01',
-      args.end_date || '2025-01-15',
-      targetUserId
-    );
-
-    console.log('[Transaction Result]', result);
-
-    const followUp = await openai.responses.create({
+    const followUp = await openai.beta.responses.create({
       model: MODEL,
       input: [
-        ...inputMessages,
+        ...input,
         toolCall,
         {
-          type: 'function_call_output',
-          call_id: toolCall.call_id,
+          type: 'tool_output',
+          tool_call_id: toolCall.call_id,
           output: JSON.stringify(result)
         }
       ],
+      instructions,
       tools
     });
 
-    const textItem = followUp.output
-      ?.find(item => item.type === 'message')
-      ?.content?.find(c => c.type === 'output_text');
+    const reply = followUp.output?.find(item => item.type === 'message');
+    const text = reply?.content?.find(c => c.type === 'output_text')?.text;
 
-    const finalResponse = textItem?.text;
-    console.log('[Final Assistant Message]', finalResponse);
+    if (!text) {
+      return res.json({
+        message: `You don’t seem to have any transactions between ${args.start_date} and ${args.end_date}. Want to try a different date range?`
+      });
+    }
 
-    return res.json({
-      message: finalResponse ||
-        `You don’t seem to have any transactions between ${args.start_date} and ${args.end_date}. Want to try a different date range?`
-    });
+    return res.json({ message: text });
 
   } catch (err) {
     console.error('❌ Error in /ask:', err);
-    return res.status(500).json({ error: err.message || 'Unexpected error' });
+    return res.status(500).json({ error: err.message || 'Unexpected server error' });
   }
 });
 
 async function fetchTransactionsFromBubble(startDate, endDate, userId) {
   const constraints = [
     { key: 'Account Holder', constraint_type: 'equals', value: userId },
-    { key: 'Date', constraint_type: 'greater than or equal to', value: startDate },
-    { key: 'Date', constraint_type: 'less than or equal to', value: endDate }
+    { key: 'Date', constraint_type: 'greater than', value: startDate },
+    { key: 'Date', constraint_type: 'less than', value: endDate }
   ];
 
   const url = `${BUBBLE_URL}?constraints=${encodeURIComponent(JSON.stringify(constraints))}`;
@@ -169,4 +154,4 @@ async function fetchTransactionsFromBubble(startDate, endDate, userId) {
 }
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`🚀 Server running at http://localhost:${PORT}`));
+app.listen(PORT, () => console.log(`🚀 Bountisphere server running on port ${PORT}`));
