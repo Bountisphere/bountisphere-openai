@@ -52,6 +52,7 @@ app.post('/ask', async (req, res) => {
     const toolCall = initialResponse.output?.find(item => item.type === 'function_call');
     if (!toolCall) {
       const textResponse = initialResponse.output?.[0]?.text || '[No assistant reply]';
+      console.log('[No function call triggered]', initialResponse.output);
       return res.json({ message: textResponse });
     }
 
@@ -64,7 +65,6 @@ app.post('/ask', async (req, res) => {
     const followUp = await openai.responses.create({
       model: MODEL,
       input: [
-        { role: 'user', content: userMessage },
         toolCall,
         {
           type: 'function_call_output',
