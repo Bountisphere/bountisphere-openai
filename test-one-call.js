@@ -1,6 +1,6 @@
 import axios from 'axios';
 
-const API_URL = 'https://bountisphere-openai-617952217530.us-central1.run.app/assistant';
+const API_URL = 'http://localhost:3000/assistant';
 
 // Use the correct user ID
 const TEST_USER_ID = '1735159562002x959413891769328900';
@@ -53,6 +53,22 @@ async function runTests() {
         {
             description: "Specific date range query",
             input: "Show me my transactions from January 2024"
+        },
+        {
+            description: "March 2025 transactions",
+            input: "Show me my transactions from March 2025"
+        },
+        {
+            description: "Capital One transactions",
+            input: "Show me my Capital One transactions from March 2025"
+        },
+        {
+            description: "Chase checking account transactions",
+            input: "Show me my Chase checking account transactions from March 2025"
+        },
+        {
+            description: "Chase credit card transactions",
+            input: "Show me my Chase credit card transactions from March 2025"
         }
     ];
 
