@@ -3,7 +3,6 @@ import bodyParser from 'body-parser';
 import OpenAI from 'openai';
 import fetch from 'node-fetch';
 import dotenv from 'dotenv';
-// Trigger redeploy - no logic change
 
 dotenv.config();
 
@@ -16,9 +15,9 @@ const ASSISTANT_ID = process.env.ASSISTANT_ID;
 const BUBBLE_API_KEY = process.env.BUBBLE_API_KEY || 'b14c2547e2d20dadfb22a8a695849146';
 const BUBBLE_URL = 'https://app.bountisphere.com/api/1.1/obj/transactions';
 
-const DEFAULT_USER_ID = '1735159562002x959413891769328900'; // can be dynamic later
+const DEFAULT_USER_ID = '1735159562002x959413891769328900';
 
-// Create Thread for new chat
+// ✅ Create a thread for new chats
 app.post('/create-thread', async (req, res) => {
   try {
     const thread = await openai.beta.threads.create();
@@ -30,18 +29,17 @@ app.post('/create-thread', async (req, res) => {
   }
 });
 
-// Ask the Assistant (main endpoint)
+// ✅ Main endpoint to send user message and get assistant reply
 app.post('/ask', async (req, res) => {
   const { userMessage, threadId } = req.body;
 
   try {
-    console.log('[Step 1] Sending user message to OpenAI:', userMessage);
+    console.log('[Step 1] User message:', userMessage);
 
-    const initialResponse = await openai.beta.responses.create({
+    const initialResponse = await openai.responses.create({
       assistant_id: ASSISTANT_ID,
       thread_id: threadId,
-      input: [{ role: 'user', content: userMessage }],
-      // No need to re-specify tools or model here
+      input: [{ role: 'user', content: userMessage }]
     });
 
     const toolCalls = initialResponse.required_action?.submit_tool_outputs?.tool_calls;
@@ -54,7 +52,7 @@ app.post('/ask', async (req, res) => {
 
       const transactions = await fetchTransactionsFromBubble(args.start_date, args.end_date);
 
-      const followUp = await openai.beta.responses.create({
+      const followUp = await openai.responses.create({
         assistant_id: ASSISTANT_ID,
         thread_id: threadId,
         previous_response_id: initialResponse.id,
@@ -76,11 +74,11 @@ app.post('/ask', async (req, res) => {
 
   } catch (err) {
     console.error('Error in /ask:', err);
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: err.message || 'Internal server error' });
   }
 });
 
-// Fetch transactions from Bubble
+// ✅ Helper: Fetch transactions from Bubble
 async function fetchTransactionsFromBubble(startDate, endDate) {
   console.log(`[Fetching transactions from ${startDate} to ${endDate}]`);
 
@@ -116,4 +114,4 @@ async function fetchTransactionsFromBubble(startDate, endDate) {
 }
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Server running on http://localhost:${PORT}`));
+app.listen(PORT, () => console.log(`🚀 Server running on http://localhost:${PORT}`));
