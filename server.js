@@ -11,6 +11,10 @@ app.use(bodyParser.json());
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
+// 🔍 Log the OpenAI SDK version for Cloud Run debugging
+console.log('[🧪 OpenAI SDK VERSION]', OpenAI.VERSION || 'VERSION not defined');
+console.log('[🧪 OpenAI Object Keys]', Object.keys(OpenAI));
+
 const MODEL = 'gpt-4o-mini';
 const BUBBLE_API_KEY = process.env.BUBBLE_API_KEY;
 const BUBBLE_URL = process.env.BUBBLE_API_URL;
