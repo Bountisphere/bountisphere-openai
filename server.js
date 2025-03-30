@@ -16,41 +16,39 @@ const BUBBLE_API_KEY = process.env.BUBBLE_API_KEY;
 const BUBBLE_URL = process.env.BUBBLE_API_URL;
 const DEFAULT_USER_ID = '1735159562002x959413891769328900';
 
-// Function schema
+// ✅ Flattened tool schema for /v1/responses API
 const tools = [{
   type: 'function',
-  function: {
-    name: 'get_transactions',
-    description: 'Get a list of transactions for the user between two dates.',
-    parameters: {
-      type: 'object',
-      properties: {
-        start_date: {
-          type: 'string',
-          description: 'Start date in YYYY-MM-DD format.'
-        },
-        end_date: {
-          type: 'string',
-          description: 'End date in YYYY-MM-DD format.'
-        }
+  name: 'get_transactions',
+  description: 'Get a list of transactions for the user between two dates.',
+  parameters: {
+    type: 'object',
+    properties: {
+      start_date: {
+        type: 'string',
+        description: 'Start date in YYYY-MM-DD format.'
       },
-      required: ['start_date', 'end_date'],
-      additionalProperties: false
-    }
+      end_date: {
+        type: 'string',
+        description: 'End date in YYYY-MM-DD format.'
+      }
+    },
+    required: ['start_date', 'end_date'],
+    additionalProperties: false
   }
 }];
 
-// ✅ POST /ask — Send user message to OpenAI and handle function calling
+// ✅ POST /ask — Entry point from Bubble
 app.post('/ask', async (req, res) => {
-  const { userMessage, threadId } = req.body;
+  const { userMessage, userId } = req.body;
+  const targetUserId = userId || DEFAULT_USER_ID;
 
   try {
     const initialResponse = await openai.responses.create({
       model: MODEL,
       input: [{ role: 'user', content: userMessage }],
       tools,
-      tool_choice: 'auto',
-      // Not using thread here yet because /v1/responses doesn't support Assistants-style threads
+      tool_choice: 'auto'
     });
 
     const toolCall = initialResponse.output?.find(item => item.type === 'function_call');
@@ -62,7 +60,7 @@ app.post('/ask', async (req, res) => {
     const args = JSON.parse(toolCall.arguments);
     console.log('[Tool Call Received]', toolCall.name, args);
 
-    const result = await fetchTransactionsFromBubble(args.start_date, args.end_date);
+    const result = await fetchTransactionsFromBubble(args.start_date, args.end_date, targetUserId);
 
     const followUp = await openai.responses.create({
       model: MODEL,
@@ -87,9 +85,9 @@ app.post('/ask', async (req, res) => {
 });
 
 // ✅ Fetch transactions from Bubble
-async function fetchTransactionsFromBubble(startDate, endDate) {
+async function fetchTransactionsFromBubble(startDate, endDate, userId) {
   const constraints = [
-    { key: 'Account Holder', constraint_type: 'equals', value: DEFAULT_USER_ID },
+    { key: 'Account Holder', constraint_type: 'equals', value: userId },
     { key: 'Date', constraint_type: 'greater than', value: startDate },
     { key: 'Date', constraint_type: 'less than', value: endDate }
   ];
