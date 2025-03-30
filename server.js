@@ -108,18 +108,16 @@ Current logged in user is ${targetUserId}. Today's date is ${new Date().toDateSt
       tools
     });
 
-    console.log('[🧠 Follow-Up Response]', JSON.stringify(followUp, null, 2));
+    // 🧠 Log full follow-up object and assistant output
+    console.log('[🧠 Raw Follow-Up Output]', JSON.stringify(followUp.output, null, 2));
+    console.log('[🧠 Full Follow-Up Object]', JSON.stringify(followUp, null, 2));
 
     const reply = followUp.output?.find(item => item.type === 'message');
+
     const text =
       reply?.content?.find(c => c.type === 'output_text')?.text ||
-      reply?.content?.find(c => c.type === 'text')?.text;
-
-    if (!text) {
-      return res.json({
-        message: `You don’t seem to have any transactions between ${args.start_date} and ${args.end_date}. Want to try a different date range?`
-      });
-    }
+      reply?.content?.find(c => c.type === 'text')?.text ||
+      '[❌ No valid reply content found in follow-up response]';
 
     return res.json({ message: text });
 
