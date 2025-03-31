@@ -11,6 +11,7 @@ app.use(bodyParser.json());
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
+// 🧪 Log OpenAI version info
 console.log('[🧪 OpenAI SDK VERSION]', OpenAI.VERSION || 'VERSION not available');
 console.log('[🧪 OpenAI Instance Methods]', Object.keys(openai?.beta?.responses || {}).join(', ') || 'responses not available');
 
@@ -19,41 +20,50 @@ const BUBBLE_API_KEY = process.env.BUBBLE_API_KEY;
 const BUBBLE_URL = process.env.BUBBLE_API_URL;
 const DEFAULT_USER_ID = '1735159562002x959413891769328900';
 
+// 🔧 Tool definitions
 const tools = [
   {
     type: 'function',
     name: 'get_user_transactions',
-    description: "Return the user's recent financial transactions.",
+    description: "Return the user's recent financial transactions, including date, amount, category, and merchant.",
     parameters: {
       type: 'object',
       properties: {
-        userId: { type: 'string', description: 'The Bountisphere user ID' },
-        start_date: { type: 'string', description: 'Start date (YYYY-MM-DD)' },
-        end_date: { type: 'string', description: 'End date (YYYY-MM-DD)' }
+        userId: { type: 'string', description: 'Bountisphere user ID' },
+        start_date: { type: 'string', description: 'Start date YYYY-MM-DD' },
+        end_date: { type: 'string', description: 'End date YYYY-MM-DD' }
       },
-      required: ['userId', 'start_date', 'end_date']
+      required: ['userId', 'start_date', 'end_date'],
+      additionalProperties: false
     }
   }
 ];
 
+// 🧠 AI endpoint
 app.post('/ask', async (req, res) => {
   const { userMessage, userId } = req.body;
   const targetUserId = userId || DEFAULT_USER_ID;
 
   try {
-    const input = [{ role: 'user', content: userMessage }];
+    const input = [
+      {
+        role: 'user',
+        content: userMessage
+      }
+    ];
 
     const instructions = `
-You are the Bountisphere Money Coach — friendly, supportive, and helpful.
+You are the Bountisphere Money Coach — a friendly, supportive, and expert financial assistant.
 
-If the question involves transactions or budgeting, use the \`get_user_transactions\` function.
+• If the question is about transactions or spending, call \`get_user_transactions\` first.
+• For app features or help, use \`file_search\`.
+• For market/economic questions, use \`web_search_preview\`.
 
-If the question involves app support, use the \`file_search\` tool.
+Use one tool only per question. Today is ${new Date().toDateString()}.
+Current user ID: ${targetUserId}.
+    `.trim();
 
-If the question involves markets or economy, use \`web_search_preview\`.
-
-Today is ${new Date().toDateString()}. Current user ID is ${targetUserId}.
-`.trim();
+    console.log('[📤 Initial Input]', input);
 
     const initialResponse = await openai.beta.responses.create({
       model: MODEL,
@@ -63,17 +73,17 @@ Today is ${new Date().toDateString()}. Current user ID is ${targetUserId}.
       tool_choice: 'auto'
     });
 
-    console.log('[🪵 Initial Response]', JSON.stringify(initialResponse, null, 2));
+    console.log('[📥 Initial Response]', JSON.stringify(initialResponse, null, 2));
 
     const toolCall = initialResponse.output?.find(item => item.type === 'function_call');
     if (!toolCall) {
-      const textResponse = initialResponse.output?.find(item => item.type === 'message')?.content?.[0]?.text;
-      return res.json({ message: textResponse || 'Sorry, I wasn’t able to generate a response.' });
+      const fallback = initialResponse.output?.find(item => item.type === 'message')?.content?.[0]?.text;
+      return res.json({ message: fallback || 'Sorry, I couldn’t generate a response.' });
     }
 
     const args = JSON.parse(toolCall.arguments);
     const result = await fetchTransactionsFromBubble(args.start_date, args.end_date, args.userId);
-    console.log('[✅ Tool Call Output]', result);
+    console.log('[✅ Tool Output]', result);
 
     const followUp = await openai.beta.responses.create({
       model: MODEL,
@@ -90,27 +100,24 @@ Today is ${new Date().toDateString()}. Current user ID is ${targetUserId}.
       tools
     });
 
-    console.log('[🔁 Follow-Up Response]', JSON.stringify(followUp, null, 2));
+    console.log('[🧠 Final AI Response]', JSON.stringify(followUp, null, 2));
 
     const reply = followUp.output?.find(item => item.type === 'message');
     const text =
       reply?.content?.find(c => c.type === 'output_text')?.text ||
       reply?.content?.find(c => c.type === 'text')?.text;
 
-    if (!text) {
-      return res.json({
-        message: `You don’t seem to have any transactions between ${args.start_date} and ${args.end_date}. Want to try a different date range?`
-      });
-    }
-
-    return res.json({ message: text });
+    return res.json({
+      message: text || `No transactions found between ${args.start_date} and ${args.end_date}. Want to try a different range?`
+    });
 
   } catch (err) {
-    console.error('❌ Server Error:', err);
+    console.error('❌ Error in /ask handler:', err);
     return res.status(500).json({ error: err.message || 'Unexpected server error' });
   }
 });
 
+// 🔄 Transaction fetcher
 async function fetchTransactionsFromBubble(startDate, endDate, userId) {
   const constraints = [
     { key: 'Account Holder', constraint_type: 'equals', value: userId },
@@ -143,5 +150,8 @@ async function fetchTransactionsFromBubble(startDate, endDate, userId) {
   };
 }
 
+// 🚀 Launch server
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`🚀 Bountisphere server running on port ${PORT}`));
+app.listen(PORT, () => {
+  console.log(`🚀 Bountisphere server running on port ${PORT}`);
+});
