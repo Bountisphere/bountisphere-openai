@@ -12,13 +12,13 @@ app.use(bodyParser.json());
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 console.log('[🧪 OpenAI SDK VERSION]', OpenAI.VERSION || 'VERSION not available');
+console.log('[🧪 openai.responses.create]', typeof openai.responses?.create === 'function' ? '✅ OK' : '❌ Not found');
 
 const MODEL = 'gpt-4o-mini';
 const BUBBLE_API_KEY = process.env.BUBBLE_API_KEY;
 const BUBBLE_URL = process.env.BUBBLE_API_URL;
 const DEFAULT_USER_ID = '1735159562002x959413891769328900';
 
-// 🔧 Tool definitions
 const tools = [
   {
     type: 'function',
@@ -74,7 +74,7 @@ Current user ID: ${targetUserId}`;
     const toolCall = initialResponse.output?.find(item => item.type === 'function_call');
     if (!toolCall) {
       const fallback = initialResponse.output?.find(item => item.type === 'message')?.content?.[0]?.text;
-      return res.json({ message: fallback || 'Sorry, I couldn\'t generate a response.' });
+      return res.json({ message: fallback || 'Sorry, I couldn’t generate a response.' });
     }
 
     const args = JSON.parse(toolCall.arguments);
@@ -87,9 +87,9 @@ Current user ID: ${targetUserId}`;
         ...input,
         toolCall,
         {
-          type: 'function_call_output', // ✅ This is the correct type
+          type: 'function_call_output',
           call_id: toolCall.call_id,
-          output: result
+          output: JSON.stringify(result)
         }
       ],
       instructions,
