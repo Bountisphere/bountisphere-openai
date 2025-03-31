@@ -12,14 +12,13 @@ app.use(bodyParser.json());
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 console.log('[🧪 OpenAI SDK VERSION]', OpenAI.VERSION || 'VERSION not available');
-console.log('[🧪 openai.responses]', openai.responses ? '✅ Exists' : '❌ Missing');
-console.log('[🧪 .create method]', typeof openai?.responses?.create === 'function' ? '✅ OK' : '❌ Not found');
 
 const MODEL = 'gpt-4o-mini';
 const BUBBLE_API_KEY = process.env.BUBBLE_API_KEY;
 const BUBBLE_URL = process.env.BUBBLE_API_URL;
 const DEFAULT_USER_ID = '1735159562002x959413891769328900';
 
+// 🔧 Tool definitions
 const tools = [
   {
     type: 'function',
@@ -38,12 +37,18 @@ const tools = [
   }
 ];
 
+// 🧠 AI endpoint
 app.post('/ask', async (req, res) => {
   const { userMessage, userId } = req.body;
   const targetUserId = userId || DEFAULT_USER_ID;
 
   try {
-    const input = [{ role: 'user', content: userMessage }];
+    const input = [
+      {
+        role: 'user',
+        content: userMessage
+      }
+    ];
 
     const instructions = `You are the Bountisphere Money Coach — a friendly, supportive, and expert financial assistant.
 
@@ -82,7 +87,7 @@ Current user ID: ${targetUserId}`;
         ...input,
         toolCall,
         {
-          type: 'tool_output',
+          type: 'function_call_output', // ✅ This is the correct type
           call_id: toolCall.call_id,
           output: result
         }
@@ -107,6 +112,7 @@ Current user ID: ${targetUserId}`;
   }
 });
 
+// 🔄 Transaction fetcher
 async function fetchTransactionsFromBubble(startDate, endDate, userId) {
   const constraints = [
     { key: 'Account Holder', constraint_type: 'equals', value: userId },
@@ -117,7 +123,9 @@ async function fetchTransactionsFromBubble(startDate, endDate, userId) {
   const url = `${BUBBLE_URL}?constraints=${encodeURIComponent(JSON.stringify(constraints))}`;
 
   const response = await fetch(url, {
-    headers: { Authorization: `Bearer ${BUBBLE_API_KEY}` }
+    headers: {
+      Authorization: `Bearer ${BUBBLE_API_KEY}`
+    }
   });
 
   const data = await response.json();
@@ -137,6 +145,7 @@ async function fetchTransactionsFromBubble(startDate, endDate, userId) {
   };
 }
 
+// 🚀 Launch server
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`🚀 Bountisphere server running on port ${PORT}`);
