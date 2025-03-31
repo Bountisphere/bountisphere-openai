@@ -44,116 +44,41 @@ app.post('/ask', async (req, res) => {
   const { userMessage, userId } = req.body;
   const targetUserId = userId || DEFAULT_USER_ID;
 
-// Assistant endpoint
-app.post('/ask', async (req, res) => {
   try {
-    console.log('\n=== Starting new request ===');
-    console.log('Request body:', req.body);
-    
-    const { userMessage, threadId, model = "gpt-4" } = req.body;
-    if (!userMessage || !threadId) {
-      return res.status(400).json({
-        error: "Missing required parameters",
-        details: {
-          error: {
-            message: `Missing required parameter: ${!userMessage ? 'userMessage' : 'threadId'}`,
-            type: "invalid_request_error",
-            param: !userMessage ? 'userMessage' : 'threadId',
-            code: "missing_required_parameter"
-          }
-        }
-      });
-    }
+    const input = [
+      {
+        role: 'user',
+        content: userMessage
+      }
+    ];
 
-    console.log('\n=== Making initial OpenAI request ===');
-    // Create initial response using OpenAI Responses API
-    const response = await openai.responses.create({
-      model: model,
-      input: userMessage,
-      tools: tools
+    const instructions = `
+You are the Bountisphere Money Coach — a friendly, supportive, and expert financial assistant.
+
+• If the question is about transactions or spending, call \`get_user_transactions\` first.
+• For app features or help, use \`file_search\`.
+• For market/economic questions, use \`web_search_preview\`.
+
+Use one tool only per question. Today is ${new Date().toDateString()}.
+Current user ID: ${targetUserId}.
+    `.trim();
+
+    console.log('[📤 Initial Input]', input);
+
+    const initialResponse = await openai.beta.responses.create({
+      model: MODEL,
+      input,
+      instructions,
+      tools,
+      tool_choice: 'auto'
     });
 
     console.log('[📥 Initial Response]', JSON.stringify(initialResponse, null, 2));
 
-    let finalAnswer = '';
-    let responseMetadata = {};
-
-    // Process function calls and messages
-    for (const item of response.output) {
-      if (item.type === 'message') {
-        finalAnswer = item.content;
-      } else if (item.type === 'function_call' && item.name === 'get_user_transactions') {
-        try {
-          const functionArgs = JSON.parse(item.arguments);
-          functionArgs.userId = functionArgs.userId || threadId;
-
-          // Get transactions from Bubble API
-          const transactions = await getBubbleTransactions(
-            functionArgs.userId,
-            functionArgs.startDate,
-            functionArgs.endDate,
-            functionArgs.bank,
-            functionArgs.account
-          );
-
-          // Process transactions
-          const simplifiedTransactions = transactions
-            .filter(t => t.is_pending !== "yes")
-            .map(t => ({
-              account: t.Account,
-              bank: t.Bank,
-              amount: t.Amount,
-              date: t.Date,
-              merchant: t["Merchant Name"],
-              category: t["Category Description"]
-            }));
-
-          // Limit transactions
-          const MAX_TRANSACTIONS = 50;
-          const limitedTransactions = simplifiedTransactions.slice(0, MAX_TRANSACTIONS);
-          
-          // Create summary
-          const transactionSummary = {
-            total_transactions: simplifiedTransactions.length,
-            showing_transactions: limitedTransactions.length,
-            transactions: limitedTransactions,
-            note: simplifiedTransactions.length > MAX_TRANSACTIONS ? 
-              `Note: Only showing ${MAX_TRANSACTIONS} most recent transactions out of ${simplifiedTransactions.length} total transactions.` : 
-              undefined
-          };
-
-          // Get final response with transaction data
-          const finalResponse = await openai.responses.create({
-            model: "gpt-4",
-            input: userMessage,
-            tools: tools,
-            function_results: [
-              {
-                name: "get_user_transactions",
-                content: JSON.stringify(transactionSummary)
-              }
-            ]
-          });
-
-          // Extract final answer
-          for (const output of finalResponse.output) {
-            if (output.type === 'message') {
-              finalAnswer = output.content;
-              break;
-            }
-          }
-
-          responseMetadata = {
-            type: "transaction_response",
-            total_transactions: transactionSummary.total_transactions,
-            shown_transactions: transactionSummary.showing_transactions
-          };
-        } catch (error) {
-          console.error('\n=== Error processing transactions ===');
-          console.error('Error:', error);
-          finalAnswer = "I apologize, but I encountered an error while trying to fetch your transactions. Please try again or contact support if the issue persists.";
-        }
-      }
+    const toolCall = initialResponse.output?.find(item => item.type === 'function_call');
+    if (!toolCall) {
+      const fallback = initialResponse.output?.find(item => item.type === 'message')?.content?.[0]?.text;
+      return res.json({ message: fallback || 'Sorry, I couldn’t generate a response.' });
     }
 
     const args = JSON.parse(toolCall.arguments);
@@ -187,13 +112,8 @@ app.post('/ask', async (req, res) => {
     });
 
   } catch (err) {
-    console.error('\n=== Error in /ask endpoint ===');
-    console.error('Error:', err);
-    return res.status(500).json({
-      success: false,
-      error: "Assistant failed",
-      details: err.message
-    });
+    console.error('❌ Error in /ask handler:', err);
+    return res.status(500).json({ error: err.message || 'Unexpected server error' });
   }
 });
 
