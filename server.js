@@ -13,7 +13,9 @@ const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 // 🧪 Log OpenAI version info
 console.log('[🧪 OpenAI SDK VERSION]', OpenAI.VERSION || 'VERSION not available');
-console.log('[🧪 OpenAI Instance Methods]', Object.keys(openai?.beta?.responses || {}).join(', ') || 'responses not available');
+console.log('[🧪 openai.beta]', openai.beta ? '✅ Exists' : '❌ Missing');
+console.log('[🧪 openai.beta.responses]', openai?.beta?.responses ? '✅ Exists' : '❌ Missing');
+console.log('[🧪 .create method]', typeof openai?.beta?.responses?.create === 'function' ? '✅ OK' : '❌ Not found');
 
 const MODEL = 'gpt-4o-mini';
 const BUBBLE_API_KEY = process.env.BUBBLE_API_KEY;
@@ -52,16 +54,14 @@ app.post('/ask', async (req, res) => {
       }
     ];
 
-    const instructions = `
-You are the Bountisphere Money Coach — a friendly, supportive, and expert financial assistant.
+    const instructions = `You are the Bountisphere Money Coach — a friendly, supportive, and expert financial assistant.
 
 • If the question is about transactions or spending, call \`get_user_transactions\` first.
 • For app features or help, use \`file_search\`.
 • For market/economic questions, use \`web_search_preview\`.
 
 Use one tool only per question. Today is ${new Date().toDateString()}.
-Current user ID: ${targetUserId}.
-    `.trim();
+Current user ID: ${targetUserId}`;
 
     console.log('[📤 Initial Input]', input);
 
@@ -78,7 +78,7 @@ Current user ID: ${targetUserId}.
     const toolCall = initialResponse.output?.find(item => item.type === 'function_call');
     if (!toolCall) {
       const fallback = initialResponse.output?.find(item => item.type === 'message')?.content?.[0]?.text;
-      return res.json({ message: fallback || 'Sorry, I couldn’t generate a response.' });
+      return res.json({ message: fallback || 'Sorry, I couldn\'t generate a response.' });
     }
 
     const args = JSON.parse(toolCall.arguments);
@@ -103,9 +103,8 @@ Current user ID: ${targetUserId}.
     console.log('[🧠 Final AI Response]', JSON.stringify(followUp, null, 2));
 
     const reply = followUp.output?.find(item => item.type === 'message');
-    const text =
-      reply?.content?.find(c => c.type === 'output_text')?.text ||
-      reply?.content?.find(c => c.type === 'text')?.text;
+    const text = reply?.content?.find(c => c.type === 'output_text')?.text || 
+                 reply?.content?.find(c => c.type === 'text')?.text;
 
     return res.json({
       message: text || `No transactions found between ${args.start_date} and ${args.end_date}. Want to try a different range?`
