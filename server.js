@@ -73,20 +73,20 @@ app.get('/', (req, res) => {
 });
 
 // Assistant endpoint
-app.post('/assistant', async (req, res) => {
+app.post('/ask', async (req, res) => {
   try {
     console.log('\n=== Starting new request ===');
     console.log('Request body:', req.body);
     
-    const { input, userId } = req.body;
-    if (!input || !userId) {
+    const { userMessage, threadId, model = "gpt-4" } = req.body;
+    if (!userMessage || !threadId) {
       return res.status(400).json({
         error: "Missing required parameters",
         details: {
           error: {
-            message: `Missing required parameter: ${!input ? 'input' : 'userId'}`,
+            message: `Missing required parameter: ${!userMessage ? 'userMessage' : 'threadId'}`,
             type: "invalid_request_error",
-            param: !input ? 'input' : 'userId',
+            param: !userMessage ? 'userMessage' : 'threadId',
             code: "missing_required_parameter"
           }
         }
@@ -96,8 +96,8 @@ app.post('/assistant', async (req, res) => {
     console.log('\n=== Making initial OpenAI request ===');
     // Create initial response using OpenAI Responses API
     const response = await openai.responses.create({
-      model: "gpt-4o",
-      input: input,
+      model: model,
+      input: userMessage,
       tools: tools
     });
 
@@ -114,7 +114,7 @@ app.post('/assistant', async (req, res) => {
       } else if (item.type === 'function_call' && item.name === 'get_user_transactions') {
         try {
           const functionArgs = JSON.parse(item.arguments);
-          functionArgs.userId = functionArgs.userId || userId;
+          functionArgs.userId = functionArgs.userId || threadId;
 
           // Get transactions from Bubble API
           const transactions = await getBubbleTransactions(
@@ -153,8 +153,8 @@ app.post('/assistant', async (req, res) => {
 
           // Get final response with transaction data
           const finalResponse = await openai.responses.create({
-            model: "gpt-4o",
-            input: input,
+            model: "gpt-4",
+            input: userMessage,
             tools: tools,
             function_results: [
               {
@@ -195,7 +195,7 @@ app.post('/assistant', async (req, res) => {
     });
 
   } catch (err) {
-    console.error('\n=== Error in /assistant endpoint ===');
+    console.error('\n=== Error in /ask endpoint ===');
     console.error('Error:', err);
     return res.status(500).json({
       success: false,
