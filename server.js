@@ -32,7 +32,7 @@ const tools = [
         start_date: { type: 'string', description: 'Start date YYYY-MM-DD' },
         end_date: { type: 'string', description: 'End date YYYY-MM-DD' }
       },
-      required: ['userId', 'start_date', 'end_date'],
+      required: ['userId'],
       additionalProperties: false
     }
   },
@@ -87,7 +87,7 @@ Current user ID: ${targetUserId}`;
     }
 
     const args = JSON.parse(toolCall.arguments);
-    const result = await fetchTransactionsFromBubble(args.start_date, args.end_date, args.userId);
+    const result = await fetchTransactionsFromBubble(args.userId, args.start_date, args.end_date);
     console.log('[✅ Tool Output]', result);
 
     const followUp = await openai.responses.create({
@@ -108,11 +108,11 @@ Current user ID: ${targetUserId}`;
     console.log('[🧠 Final AI Response]', JSON.stringify(followUp, null, 2));
 
     const reply = followUp.output?.find(item => item.type === 'message');
-    const text = reply?.content?.find(c => c.type === 'output_text')?.text ||
+    const text = reply?.content?.find(c => c.type === 'output_text')?.text || 
                  reply?.content?.find(c => c.type === 'text')?.text;
 
     return res.json({
-      message: text || `No transactions found between ${args.start_date} and ${args.end_date}. Want to try a different range?`
+      message: text || `No transactions found in the selected range. Want to try a different period?`
     });
 
   } catch (err) {
@@ -121,12 +121,18 @@ Current user ID: ${targetUserId}`;
   }
 });
 
-// 🔄 Transaction fetcher
-async function fetchTransactionsFromBubble(startDate, endDate, userId) {
+// 🔄 Transaction fetcher with smart default (last 12 months)
+async function fetchTransactionsFromBubble(userId, startDate, endDate) {
+  const today = new Date();
+  const end = endDate || today.toISOString().split('T')[0];
+  const pastDate = new Date(today);
+  pastDate.setFullYear(today.getFullYear() - 1);
+  const start = startDate || pastDate.toISOString().split('T')[0];
+
   const constraints = [
     { key: 'Account Holder', constraint_type: 'equals', value: userId },
-    { key: 'Date', constraint_type: 'greater than', value: startDate },
-    { key: 'Date', constraint_type: 'less than', value: endDate }
+    { key: 'Date', constraint_type: 'greater than', value: start },
+    { key: 'Date', constraint_type: 'less than', value: end }
   ];
 
   const url = `${BUBBLE_URL}?constraints=${encodeURIComponent(JSON.stringify(constraints))}`;
