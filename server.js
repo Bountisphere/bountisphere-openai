@@ -18,7 +18,7 @@ const MODEL = 'gpt-4o-mini';
 const BUBBLE_API_KEY = process.env.BUBBLE_API_KEY;
 const BUBBLE_URL = process.env.BUBBLE_API_URL;
 const DEFAULT_USER_ID = '1735159562002x959413891769328900';
-const VECTOR_STORE_ID = 'vs_JScHftFeKAv35y4QHPz9QwMb';
+const FILE_VECTOR_STORE_ID = 'vs_JScHftFeKAv35y4QHPz9QwMb';
 
 const tools = [
   {
@@ -38,7 +38,7 @@ const tools = [
   },
   {
     type: 'file_search',
-    vector_store_ids: [VECTOR_STORE_ID]
+    vector_store_ids: [FILE_VECTOR_STORE_ID]
   },
   {
     type: 'web_search'
@@ -49,7 +49,7 @@ const tools = [
 app.post('/ask', async (req, res) => {
   const { userMessage, userId, userLocalDate } = req.body;
   const targetUserId = userId || DEFAULT_USER_ID;
-  const today = userLocalDate || new Date().toISOString().split('T')[0];
+  const today = userLocalDate || new Date().toDateString();
 
   try {
     const input = [
@@ -59,15 +59,14 @@ app.post('/ask', async (req, res) => {
       }
     ];
 
-    const instructions = `
-You are the Bountisphere Money Coach — a friendly, supportive, and expert financial assistant.
+    const instructions = `You are the Bountisphere Money Coach — a friendly, supportive, and expert financial assistant.
 
 • If the question is about transactions or spending, call \`get_user_transactions\` first.
 • For app features or help, use \`file_search\`.
 • For market/economic questions, use \`web_search_preview\`.
 
 Use one tool only per question. Today is ${today}.
-Current user ID: ${targetUserId}`.trim();
+Current user ID: ${targetUserId}`;
 
     console.log('[📤 Initial Input]', input);
 
@@ -109,7 +108,7 @@ Current user ID: ${targetUserId}`.trim();
     console.log('[🧠 Final AI Response]', JSON.stringify(followUp, null, 2));
 
     const reply = followUp.output?.find(item => item.type === 'message');
-    const text = reply?.content?.find(c => c.type === 'output_text')?.text || 
+    const text = reply?.content?.find(c => c.type === 'output_text')?.text ||
                  reply?.content?.find(c => c.type === 'text')?.text;
 
     return res.json({
