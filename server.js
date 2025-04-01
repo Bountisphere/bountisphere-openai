@@ -1,3 +1,4 @@
+// server.js
 import express from 'express';
 import bodyParser from 'body-parser';
 import OpenAI from 'openai';
@@ -18,13 +19,13 @@ const MODEL = 'gpt-4o-mini';
 const BUBBLE_API_KEY = process.env.BUBBLE_API_KEY;
 const BUBBLE_URL = process.env.BUBBLE_API_URL;
 const DEFAULT_USER_ID = '1735159562002x959413891769328900';
-const FILE_VECTOR_STORE_ID = 'vs_JScHftFeKAv35y4QHPz9QwMb';
+const ACCOUNT_LOOKUP_URL = process.env.BUBBLE_ACCOUNT_LOOKUP_URL;
 
 const tools = [
   {
     type: 'function',
     name: 'get_user_transactions',
-    description: "Return the user's recent financial transactions, including date, amount, category, merchant, account, and category details.",
+    description: "Return the user's recent financial transactions, including date, amount, category, and merchant.",
     parameters: {
       type: 'object',
       properties: {
@@ -35,45 +36,23 @@ const tools = [
       required: ['userId', 'start_date', 'end_date'],
       additionalProperties: false
     }
-  },
-  {
-    type: 'file_search',
-    vector_store_ids: [FILE_VECTOR_STORE_ID]
-  },
-  {
-    type: 'web_search'
   }
 ];
 
-// 🧠 AI endpoint
 app.post('/ask', async (req, res) => {
-  const { userMessage, userId, userLocalDate } = req.body;
+  const { userMessage, userId } = req.body;
   const targetUserId = userId || DEFAULT_USER_ID;
-  const today = userLocalDate || new Date().toDateString();
 
-  try {
-    const input = [
-      {
-        role: 'user',
-        content: userMessage
-      }
-    ];
+  const today = new Date().toDateString();
+  const input = [{ role: 'user', content: userMessage }];
 
-    const instructions = `You are the Bountisphere Money Coach — a smart, supportive, and expert financial assistant and behavioral coach.
+  const instructions = `You are the Bountisphere Money Coach — a friendly, non-judgmental, supportive, and expert financial assistant who also understands behavioral psychology. You help users not only manage money but also build healthier habits, shift their mindset, and understand their behavior.
 
-Your mission is to help people understand their money with insight, compassion, and clarity. You read their real transactions, identify spending patterns, and help them build better habits using principles from psychology, behavioral science, and financial planning.
-
-Always be on the user's side — non-judgmental, clear, warm, and helpful. Your tone should inspire calm confidence and forward progress. 
-
-• If the question is about transactions or spending, call \`get_user_transactions\` first.
-• For app features or help, use \`file_search\`.
-• For market/economic questions, use \`web_search_preview\`.
-
-Use one tool only per question. Today is ${today}.
+• For transaction and spending questions, call \`get_user_transactions\`.
+• Use one tool per question. Today is ${today}.
 Current user ID: ${targetUserId}`;
 
-    console.log('[📤 Initial Input]', input);
-
+  try {
     const initialResponse = await openai.responses.create({
       model: MODEL,
       input,
@@ -81,8 +60,6 @@ Current user ID: ${targetUserId}`;
       tools,
       tool_choice: 'auto'
     });
-
-    console.log('[📥 Initial Response]', JSON.stringify(initialResponse, null, 2));
 
     const toolCall = initialResponse.output?.find(item => item.type === 'function_call');
     if (!toolCall) {
@@ -92,40 +69,30 @@ Current user ID: ${targetUserId}`;
 
     const args = JSON.parse(toolCall.arguments);
     const result = await fetchTransactionsFromBubble(args.start_date, args.end_date, args.userId);
-    console.log('[✅ Tool Output]', result);
 
     const followUp = await openai.responses.create({
       model: MODEL,
       input: [
         ...input,
         toolCall,
-        {
-          type: 'function_call_output',
-          call_id: toolCall.call_id,
-          output: JSON.stringify(result)
-        }
+        { type: 'function_call_output', call_id: toolCall.call_id, output: JSON.stringify(result) }
       ],
       instructions,
       tools
     });
 
-    console.log('[🧠 Final AI Response]', JSON.stringify(followUp, null, 2));
-
     const reply = followUp.output?.find(item => item.type === 'message');
-    const text = reply?.content?.find(c => c.type === 'output_text')?.text ||
-                 reply?.content?.find(c => c.type === 'text')?.text;
+    const text = reply?.content?.find(c => c.type === 'output_text')?.text || reply?.content?.find(c => c.type === 'text')?.text;
 
     return res.json({
       message: text || `No transactions found between ${args.start_date} and ${args.end_date}. Want to try a different range?`
     });
-
   } catch (err) {
     console.error('❌ Error in /ask handler:', err);
     return res.status(500).json({ error: err.message || 'Unexpected server error' });
   }
 });
 
-// 🔄 Transaction fetcher
 async function fetchTransactionsFromBubble(startDate, endDate, userId) {
   const constraints = [
     { key: 'Account Holder', constraint_type: 'equals', value: userId },
@@ -136,31 +103,40 @@ async function fetchTransactionsFromBubble(startDate, endDate, userId) {
   const url = `${BUBBLE_URL}?constraints=${encodeURIComponent(JSON.stringify(constraints))}&limit=1000`;
 
   const response = await fetch(url, {
-    headers: {
-      Authorization: `Bearer ${BUBBLE_API_KEY}`
-    }
+    headers: { Authorization: `Bearer ${BUBBLE_API_KEY}` }
   });
 
   const data = await response.json();
+  const rawTransactions = data?.response?.results || [];
 
-  if (!data?.response?.results) {
-    throw new Error('No transaction data returned from Bubble');
-  }
+  const accountIds = [...new Set(rawTransactions.map(tx => tx.Account))];
+  const accountNames = await getAccountNames(accountIds);
 
   return {
-    totalCount: data.response.results.length,
-    transactions: data.response.results.map(tx => ({
+    totalCount: rawTransactions.length,
+    transactions: rawTransactions.map(tx => ({
       date: tx.Date,
       amount: tx.Amount,
       merchant: tx['Merchant Name'] || tx.Description || 'Unknown',
       category: tx['Category Description'] || tx['Category (Old)'] || 'Uncategorized',
-      category_details: tx['Category Details'] || null,
-      account: tx['Account'] || 'Unspecified'
+      category_details: tx['Category Details'] || '',
+      account: accountNames[tx.Account] || tx.Account
     }))
   };
 }
 
-// 🚀 Launch server
+async function getAccountNames(accountIds) {
+  const lookup = {};
+  for (const id of accountIds) {
+    const res = await fetch(`${ACCOUNT_LOOKUP_URL}/${id}`, {
+      headers: { Authorization: `Bearer ${BUBBLE_API_KEY}` }
+    });
+    const json = await res.json();
+    lookup[id] = json?.response?.Account || id;
+  }
+  return lookup;
+}
+
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`🚀 Bountisphere server running on port ${PORT}`);
