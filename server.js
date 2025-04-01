@@ -1,3 +1,4 @@
+// ✅ server.js with File Search + Web Search + Transactions
 import express from 'express';
 import bodyParser from 'body-parser';
 import OpenAI from 'openai';
@@ -18,8 +19,10 @@ const MODEL = 'gpt-4o-mini';
 const BUBBLE_API_KEY = process.env.BUBBLE_API_KEY;
 const BUBBLE_URL = process.env.BUBBLE_API_URL;
 const DEFAULT_USER_ID = '1735159562002x959413891769328900';
+const VECTOR_STORE_ID = 'vs_JScHftFeKAv35y4QHPz9QwMb';
 
 const tools = [
+  // 🧾 Custom function tool
   {
     type: 'function',
     name: 'get_user_transactions',
@@ -34,6 +37,15 @@ const tools = [
       required: ['userId', 'start_date', 'end_date'],
       additionalProperties: false
     }
+  },
+  // 📁 File search tool
+  {
+    type: 'file_search',
+    vector_store_ids: [VECTOR_STORE_ID]
+  },
+  // 🌐 Web search tool
+  {
+    type: 'web_search'
   }
 ];
 
@@ -52,9 +64,9 @@ app.post('/ask', async (req, res) => {
 
     const instructions = `You are the Bountisphere Money Coach — a friendly, supportive, and expert financial assistant.
 
-• If the question is about transactions or spending, call \`get_user_transactions\` first.
-• For app features or help, use \`file_search\`.
-• For market/economic questions, use \`web_search_preview\`.
+- If the question is about transactions or spending, call \`get_user_transactions\` first.
+- For app features or help, use \`file_search\`.
+- For market/economic questions, use \`web_search\`.
 
 Use one tool only per question. Today is ${new Date().toDateString()}.
 Current user ID: ${targetUserId}`;
@@ -99,13 +111,12 @@ Current user ID: ${targetUserId}`;
     console.log('[🧠 Final AI Response]', JSON.stringify(followUp, null, 2));
 
     const reply = followUp.output?.find(item => item.type === 'message');
-    const text = reply?.content?.find(c => c.type === 'output_text')?.text || 
+    const text = reply?.content?.find(c => c.type === 'output_text')?.text ||
                  reply?.content?.find(c => c.type === 'text')?.text;
 
     return res.json({
       message: text || `No transactions found between ${args.start_date} and ${args.end_date}. Want to try a different range?`
     });
-
   } catch (err) {
     console.error('❌ Error in /ask handler:', err);
     return res.status(500).json({ error: err.message || 'Unexpected server error' });
@@ -145,7 +156,7 @@ async function fetchTransactionsFromBubble(startDate, endDate, userId) {
   };
 }
 
-// 🚀 Launch server
+// 🚀 Start server
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`🚀 Bountisphere server running on port ${PORT}`);
