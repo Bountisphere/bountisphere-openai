@@ -1,4 +1,3 @@
-// server.js
 import express from 'express';
 import bodyParser from 'body-parser';
 import OpenAI from 'openai';
@@ -25,7 +24,7 @@ const tools = [
   {
     type: 'function',
     name: 'get_user_transactions',
-    description: "Return the user's recent financial transactions, including date, amount, category, and merchant.",
+    description: "Return the user's recent financial transactions, including date, amount, category, merchant, account, and category details.",
     parameters: {
       type: 'object',
       properties: {
@@ -60,18 +59,17 @@ app.post('/ask', async (req, res) => {
       }
     ];
 
-    const instructions = `You are the Bountisphere Money Coach — a friendly, supportive, and deeply insightful guide who helps users manage their money, reduce debt, build healthier habits, and gain peace of mind.
+    const instructions = `You are the Bountisphere Money Coach — a smart, supportive, and expert financial assistant and behavioral coach.
 
-You are always non-judgmental and 100% on the user's side. Think like a behavioral psychologist as much as a financial expert — your job is to help users understand their spending patterns, build better habits, and shift their mindset.
+Your mission is to help people understand their money with insight, compassion, and clarity. You read their real transactions, identify spending patterns, and help them build better habits using principles from psychology, behavioral science, and financial planning.
 
-You can offer clear advice, encouragement, or thoughtful nudges. Use plain language, never shame the user, and always keep the tone warm, helpful, and empowering.
+Always be on the user's side — non-judgmental, clear, warm, and helpful. Your tone should inspire calm confidence and forward progress. 
 
-• For questions about spending or transactions, call \`get_user_transactions\`.
-• For product or feature help, use \`file_search\`.
-• For news, market trends, or external info, use \`web_search_preview\`.
+• If the question is about transactions or spending, call \`get_user_transactions\` first.
+• For app features or help, use \`file_search\`.
+• For market/economic questions, use \`web_search_preview\`.
 
-Use one tool only per question.
-Today is ${today}.
+Use one tool only per question. Today is ${today}.
 Current user ID: ${targetUserId}`;
 
     console.log('[📤 Initial Input]', input);
@@ -114,7 +112,7 @@ Current user ID: ${targetUserId}`;
     console.log('[🧠 Final AI Response]', JSON.stringify(followUp, null, 2));
 
     const reply = followUp.output?.find(item => item.type === 'message');
-    const text = reply?.content?.find(c => c.type === 'output_text')?.text || 
+    const text = reply?.content?.find(c => c.type === 'output_text')?.text ||
                  reply?.content?.find(c => c.type === 'text')?.text;
 
     return res.json({
@@ -155,7 +153,9 @@ async function fetchTransactionsFromBubble(startDate, endDate, userId) {
       date: tx.Date,
       amount: tx.Amount,
       merchant: tx['Merchant Name'] || tx.Description || 'Unknown',
-      category: tx['Category Description'] || tx['Category (Old)'] || 'Uncategorized'
+      category: tx['Category Description'] || tx['Category (Old)'] || 'Uncategorized',
+      category_details: tx['Category Details'] || null,
+      account: tx['Account'] || 'Unspecified'
     }))
   };
 }
