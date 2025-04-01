@@ -1,3 +1,4 @@
+// server.js
 import express from 'express';
 import bodyParser from 'body-parser';
 import OpenAI from 'openai';
@@ -32,7 +33,7 @@ const tools = [
         start_date: { type: 'string', description: 'Start date YYYY-MM-DD' },
         end_date: { type: 'string', description: 'End date YYYY-MM-DD' }
       },
-      required: ['userId'],
+      required: ['userId', 'start_date', 'end_date'],
       additionalProperties: false
     }
   },
@@ -59,13 +60,18 @@ app.post('/ask', async (req, res) => {
       }
     ];
 
-    const instructions = `You are the Bountisphere Money Coach — a friendly, supportive, and expert financial assistant.
+    const instructions = `You are the Bountisphere Money Coach — a friendly, supportive, and deeply insightful guide who helps users manage their money, reduce debt, build healthier habits, and gain peace of mind.
 
-• If the question is about transactions or spending, call \`get_user_transactions\` first.
-• For app features or help, use \`file_search\`.
-• For market/economic questions, use \`web_search_preview\`.
+You are always non-judgmental and 100% on the user's side. Think like a behavioral psychologist as much as a financial expert — your job is to help users understand their spending patterns, build better habits, and shift their mindset.
 
-Use one tool only per question. Today is ${today}.
+You can offer clear advice, encouragement, or thoughtful nudges. Use plain language, never shame the user, and always keep the tone warm, helpful, and empowering.
+
+• For questions about spending or transactions, call \`get_user_transactions\`.
+• For product or feature help, use \`file_search\`.
+• For news, market trends, or external info, use \`web_search_preview\`.
+
+Use one tool only per question.
+Today is ${today}.
 Current user ID: ${targetUserId}`;
 
     console.log('[📤 Initial Input]', input);
@@ -87,7 +93,7 @@ Current user ID: ${targetUserId}`;
     }
 
     const args = JSON.parse(toolCall.arguments);
-    const result = await fetchTransactionsFromBubble(args.userId, args.start_date, args.end_date);
+    const result = await fetchTransactionsFromBubble(args.start_date, args.end_date, args.userId);
     console.log('[✅ Tool Output]', result);
 
     const followUp = await openai.responses.create({
@@ -112,7 +118,7 @@ Current user ID: ${targetUserId}`;
                  reply?.content?.find(c => c.type === 'text')?.text;
 
     return res.json({
-      message: text || `No transactions found in the selected range. Want to try a different period?`
+      message: text || `No transactions found between ${args.start_date} and ${args.end_date}. Want to try a different range?`
     });
 
   } catch (err) {
@@ -121,21 +127,15 @@ Current user ID: ${targetUserId}`;
   }
 });
 
-// 🔄 Transaction fetcher with smart default (last 12 months)
-async function fetchTransactionsFromBubble(userId, startDate, endDate) {
-  const today = new Date();
-  const end = endDate || today.toISOString().split('T')[0];
-  const pastDate = new Date(today);
-  pastDate.setFullYear(today.getFullYear() - 1);
-  const start = startDate || pastDate.toISOString().split('T')[0];
-
+// 🔄 Transaction fetcher
+async function fetchTransactionsFromBubble(startDate, endDate, userId) {
   const constraints = [
     { key: 'Account Holder', constraint_type: 'equals', value: userId },
-    { key: 'Date', constraint_type: 'greater than', value: start },
-    { key: 'Date', constraint_type: 'less than', value: end }
+    { key: 'Date', constraint_type: 'greater than', value: startDate },
+    { key: 'Date', constraint_type: 'less than', value: endDate }
   ];
 
-  const url = `${BUBBLE_URL}?constraints=${encodeURIComponent(JSON.stringify(constraints))}`;
+  const url = `${BUBBLE_URL}?constraints=${encodeURIComponent(JSON.stringify(constraints))}&limit=1000`;
 
   const response = await fetch(url, {
     headers: {
