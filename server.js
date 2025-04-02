@@ -1,183 +1,127 @@
-import express from 'express';
-import bodyParser from 'body-parser';
-import OpenAI from 'openai';
-import fetch from 'node-fetch';
-import dotenv from 'dotenv';
-
+// server.js
+import express from "express";
+import cors from "cors";
+import fetch from "node-fetch";
+import dotenv from "dotenv";
 dotenv.config();
 
 const app = express();
-app.use(bodyParser.json());
+app.use(cors());
+app.use(express.json());
 
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-
-console.log('[🧪 OpenAI SDK VERSION]', OpenAI.VERSION || 'VERSION not available');
-console.log('[🧪 openai.responses.create]', typeof openai.responses?.create === 'function' ? '✅ OK' : '❌ Not found');
-
-const MODEL = 'gpt-4o-mini';
 const BUBBLE_API_KEY = process.env.BUBBLE_API_KEY;
-const BUBBLE_URL = process.env.BUBBLE_API_URL;
-const DEFAULT_USER_ID = '1735159562002x959413891769328900';
-const FILE_VECTOR_STORE_ID = 'vs_JScHftFeKAv35y4QHPz9QwMb';
+const BASE_URL = "https://app.bountisphere.com/api/1.1/obj";
 
-const tools = [
-  {
-    type: 'function',
-    name: 'get_user_transactions',
-    description: "Return the user's recent financial transactions, including date, amount, category, merchant, account, and bank.",
-    parameters: {
-      type: 'object',
-      properties: {
-        userId: { type: 'string', description: 'Bountisphere user ID' },
-        start_date: { type: 'string', description: 'Start date YYYY-MM-DD' },
-        end_date: { type: 'string', description: 'End date YYYY-MM-DD' }
-      },
-      required: ['userId', 'start_date', 'end_date'],
-      additionalProperties: false
-    }
-  },
-  {
-    type: 'file_search',
-    vector_store_ids: [FILE_VECTOR_STORE_ID]
-  },
-  {
-    type: 'web_search'
-  }
-];
+// 🔐 Helper to fetch data from Bubble
+async function fetchFromBubble(endpoint, constraints) {
+  const url = `${BASE_URL}/${endpoint}?constraints=${encodeURIComponent(JSON.stringify(constraints))}&limit=1000`;
+  const response = await fetch(url, {
+    headers: { Authorization: `Bearer ${BUBBLE_API_KEY}` },
+  });
+  const data = await response.json();
+  return data?.response?.results || [];
+}
 
-// 🧠 AI endpoint
-app.post('/ask', async (req, res) => {
-  const { userMessage, userId, userLocalDate } = req.body;
-  const targetUserId = userId || DEFAULT_USER_ID;
-  const today = userLocalDate || new Date().toDateString();
-
+// 🚀 Transactions endpoint
+app.post("/get_user_transactions", async (req, res) => {
+  const { userId, start_date, end_date } = req.body;
   try {
-    const input = [
-      {
-        role: 'user',
-        content: userMessage
-      }
+    const constraints = [
+      { key: "Account Holder", constraint_type: "equals", value: userId },
+      { key: "Date", constraint_type: "greater than", value: start_date },
+      { key: "Date", constraint_type: "less than", value: end_date },
     ];
-
-    const instructions = `You are the Bountisphere Money Coach — a smart, supportive, and expert financial assistant and behavioral coach.
-
-Your mission is to help people understand their money with insight, compassion, and clarity. You read their real transactions, identify spending patterns, and help them build better habits using principles from psychology, behavioral science, and financial planning.
-
-Always be on the user's side — non-judgmental, clear, warm, and helpful. Your tone should inspire calm confidence and forward progress.
-
-• If the question is about transactions or spending, call \`get_user_transactions\` first.
-• For app features or help, use \`file_search\`.
-• For market/economic questions, use \`web_search\`.
-
-Use one tool only per question. Today is ${today}.
-Current user ID: ${targetUserId}`;
-
-    console.log('[📤 Initial Input]', input);
-
-    const initialResponse = await openai.responses.create({
-      model: MODEL,
-      input,
-      instructions,
-      tools,
-      tool_choice: 'auto'
-    });
-
-    console.log('[📥 Initial Response]', JSON.stringify(initialResponse, null, 2));
-
-    const toolCall = initialResponse.output?.find(item => item.type === 'function_call');
-    if (!toolCall) {
-      const fallback = initialResponse.output?.find(item => item.type === 'message')?.content?.[0]?.text;
-      return res.json({ message: fallback || 'Sorry, I couldn’t generate a response.' });
-    }
-
-    const args = JSON.parse(toolCall.arguments);
-    const result = await fetchTransactionsFromBubble(args.start_date, args.end_date, args.userId);
-    console.log('[✅ Tool Output]', result);
-
-    const followUp = await openai.responses.create({
-      model: MODEL,
-      input: [
-        ...input,
-        toolCall,
-        {
-          type: 'function_call_output',
-          call_id: toolCall.call_id,
-          output: JSON.stringify(result)
-        }
-      ],
-      instructions,
-      tools
-    });
-
-    console.log('[🧠 Final AI Response]', JSON.stringify(followUp, null, 2));
-
-    const reply = followUp.output?.find(item => item.type === 'message');
-    const text = reply?.content?.find(c => c.type === 'output_text')?.text ||
-                 reply?.content?.find(c => c.type === 'text')?.text;
-
-    return res.json({
-      message: text || `No transactions found between ${args.start_date} and ${args.end_date}. Want to try a different range?`
-    });
-
-  } catch (err) {
-    console.error('❌ Error in /ask handler:', err);
-    return res.status(500).json({ error: err.message || 'Unexpected server error' });
+    const transactions = await fetchFromBubble("transactions", constraints);
+    const formatted = transactions.map((tx) => ({
+      date: tx.Date,
+      amount: tx.Amount,
+      merchant: tx["Merchant Name"] || tx.Description || "Unknown",
+      category: tx["Category Description"] || tx["Category (Old)"] || "Uncategorized",
+      category_details: tx["Category Details"] || null,
+      account: tx["Account"] || "Unspecified",
+      bank: tx["Bank"] || null,
+    }));
+    res.json({ totalCount: formatted.length, transactions: formatted });
+  } catch (e) {
+    console.error("/get_user_transactions error:", e);
+    res.status(500).json({ error: "Unable to fetch transactions" });
   }
 });
 
-// 🔄 Transaction fetcher with pagination
-async function fetchTransactionsFromBubble(startDate, endDate, userId) {
-  const allTransactions = [];
-  let cursor = 0;
-  let hasMore = true;
-
-  while (hasMore) {
+// 💳 Credit Card endpoint
+app.post("/get_user_credit_cards", async (req, res) => {
+  const { userId } = req.body;
+  try {
     const constraints = [
-      { key: 'Account Holder', constraint_type: 'equals', value: userId },
-      { key: 'Date', constraint_type: 'greater than', value: startDate },
-      { key: 'Date', constraint_type: 'less than', value: endDate }
+      { key: "Created By", constraint_type: "equals", value: userId },
     ];
-
-    const url = `${BUBBLE_URL}?constraints=${encodeURIComponent(JSON.stringify(constraints))}&cursor=${cursor}`;
-
-    const response = await fetch(url, {
-      headers: {
-        Authorization: `Bearer ${BUBBLE_API_KEY}`
-      }
-    });
-
-    const data = await response.json();
-
-    if (!data?.response?.results) {
-      throw new Error('No transaction data returned from Bubble');
-    }
-
-    allTransactions.push(
-      ...data.response.results.map(tx => ({
-        date: tx.Date,
-        amount: tx.Amount,
-        merchant: tx['Merchant Name'] || tx.Description || 'Unknown',
-        category: tx['Category Description'] || tx['Category (Old)'] || 'Uncategorized',
-        category_details: tx['Category Details'] || null,
-        account: tx['Account'] || 'Unspecified',
-        bank: tx['Bank'] || null
-      }))
-    );
-
-    if (data.response.remaining === 0 || !data.response.remaining) {
-      hasMore = false;
-    } else {
-      cursor += data.response.count || 100;
-    }
+    const cards = await fetchFromBubble("credit_card", constraints);
+    const formatted = cards.map((cc) => ({
+      account: cc.Account,
+      available_credit: cc["Available Credit"],
+      current_balance: cc["Current Balance"],
+      min_payment_due: cc["Min Payment Due"],
+      interest_rate: cc["Interest Rate"],
+      payment_due_date: cc["Payment Due Date"],
+    }));
+    res.json({ totalCount: formatted.length, credit_cards: formatted });
+  } catch (e) {
+    console.error("/get_user_credit_cards error:", e);
+    res.status(500).json({ error: "Unable to fetch credit cards" });
   }
+});
 
-  return {
-    totalCount: allTransactions.length,
-    transactions: allTransactions
-  };
-}
+// 🏦 Loan endpoint
+app.post("/get_user_loans", async (req, res) => {
+  const { userId } = req.body;
+  try {
+    const constraints = [
+      { key: "Created By", constraint_type: "equals", value: userId },
+    ];
+    const loans = await fetchFromBubble("loans", constraints);
+    const formatted = loans.map((loan) => ({
+      account: loan.Account,
+      current_balance: loan["Current Loan Balance"],
+      escrow_balance: loan["Escrow Balance"],
+      interest_rate: loan["Interest Rate"],
+      original_loan_amount: loan["Original Loan Amount"],
+      ytd_interest_paid: loan["YTD interest paid"],
+      ytd_principal_paid: loan["YTD principle paid"],
+      due_date: loan["Due Date"],
+      payoff_date: loan["Payoff Date"],
+      loan_type: loan["Loan Type"],
+      loan_origination_date: loan["Loan Origination Date"],
+    }));
+    res.json({ totalCount: formatted.length, loans: formatted });
+  } catch (e) {
+    console.error("/get_user_loans error:", e);
+    res.status(500).json({ error: "Unable to fetch loans" });
+  }
+});
 
-// 🚀 Launch server
+// 📈 Investments endpoint
+app.post("/get_user_investments", async (req, res) => {
+  const { userId } = req.body;
+  try {
+    const constraints = [
+      { key: "Created By", constraint_type: "equals", value: userId },
+    ];
+    const investments = await fetchFromBubble("investments", constraints);
+    const formatted = investments.map((inv) => ({
+      account: inv.Account,
+      current_balance: inv["Current Balance"],
+      cost_basis: inv["Cost Basis"],
+      quantity: inv["Quanity of Shares or Units"],
+      ticker: inv["Ticker Symbol"],
+    }));
+    res.json({ totalCount: formatted.length, investments: formatted });
+  } catch (e) {
+    console.error("/get_user_investments error:", e);
+    res.status(500).json({ error: "Unable to fetch investments" });
+  }
+});
+
+// 🏁 Start server
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`🚀 Bountisphere server running on port ${PORT}`);
