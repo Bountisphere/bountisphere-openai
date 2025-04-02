@@ -24,7 +24,7 @@ const tools = [
   {
     type: 'function',
     name: 'get_user_transactions',
-    description: "Return the user's recent financial transactions, including date, amount, category, merchant, account, and category details.",
+    description: "Return the user's recent financial transactions, including date, amount, category, merchant, account, and bank.",
     parameters: {
       type: 'object',
       properties: {
@@ -63,11 +63,11 @@ app.post('/ask', async (req, res) => {
 
 Your mission is to help people understand their money with insight, compassion, and clarity. You read their real transactions, identify spending patterns, and help them build better habits using principles from psychology, behavioral science, and financial planning.
 
-Always be on the user's side — non-judgmental, clear, warm, and helpful. Your tone should inspire calm confidence and forward progress. 
+Always be on the user's side — non-judgmental, clear, warm, and helpful. Your tone should inspire calm confidence and forward progress.
 
 • If the question is about transactions or spending, call \`get_user_transactions\` first.
 • For app features or help, use \`file_search\`.
-• For market/economic questions, use \`web_search_preview\`.
+• For market/economic questions, use \`web_search\`.
 
 Use one tool only per question. Today is ${today}.
 Current user ID: ${targetUserId}`;
@@ -125,41 +125,55 @@ Current user ID: ${targetUserId}`;
   }
 });
 
-// 🔄 Transaction fetcher
+// 🔄 Transaction fetcher with pagination
 async function fetchTransactionsFromBubble(startDate, endDate, userId) {
-  const constraints = [
-    { key: 'Account Holder', constraint_type: 'equals', value: userId },
-    { key: 'Date', constraint_type: 'greater than', value: startDate },
-    { key: 'Date', constraint_type: 'less than', value: endDate }
-  ];
+  const allTransactions = [];
+  let cursor = 0;
+  let hasMore = true;
 
-  const url = `${BUBBLE_URL}?constraints=${encodeURIComponent(JSON.stringify(constraints))}&limit=1000`;
+  while (hasMore) {
+    const constraints = [
+      { key: 'Account Holder', constraint_type: 'equals', value: userId },
+      { key: 'Date', constraint_type: 'greater than', value: startDate },
+      { key: 'Date', constraint_type: 'less than', value: endDate }
+    ];
 
-  const response = await fetch(url, {
-    headers: {
-      Authorization: `Bearer ${BUBBLE_API_KEY}`
+    const url = `${BUBBLE_URL}?constraints=${encodeURIComponent(JSON.stringify(constraints))}&cursor=${cursor}`;
+
+    const response = await fetch(url, {
+      headers: {
+        Authorization: `Bearer ${BUBBLE_API_KEY}`
+      }
+    });
+
+    const data = await response.json();
+
+    if (!data?.response?.results) {
+      throw new Error('No transaction data returned from Bubble');
     }
-  });
 
-  const data = await response.json();
+    allTransactions.push(
+      ...data.response.results.map(tx => ({
+        date: tx.Date,
+        amount: tx.Amount,
+        merchant: tx['Merchant Name'] || tx.Description || 'Unknown',
+        category: tx['Category Description'] || tx['Category (Old)'] || 'Uncategorized',
+        category_details: tx['Category Details'] || null,
+        account: tx['Account'] || 'Unspecified',
+        bank: tx['Bank'] || null
+      }))
+    );
 
-  if (!data?.response?.results) {
-    throw new Error('No transaction data returned from Bubble');
+    if (data.response.remaining === 0 || !data.response.remaining) {
+      hasMore = false;
+    } else {
+      cursor += data.response.count || 100;
+    }
   }
 
   return {
-    totalCount: data.response.results.length,
-    transactions: data.response.results.map(tx => ({
-      date: tx.Date,
-      amount: tx.Amount,
-      merchant: tx['Merchant Name'] || tx.Description || 'Unknown',
-      category: tx['Category Description'] || tx['Category (Old)'] || 'Uncategorized',
-      category_details: tx['Category Details'] || null,
-      account: typeof tx.Account === 'object'
-        ? tx.Account.display || tx.Account.name || 'Unnamed Account'
-        : tx.Account,
-      bank: tx.Bank || null
-    }))
+    totalCount: allTransactions.length,
+    transactions: allTransactions
   };
 }
 
