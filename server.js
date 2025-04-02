@@ -155,7 +155,10 @@ async function fetchTransactionsFromBubble(startDate, endDate, userId) {
       merchant: tx['Merchant Name'] || tx.Description || 'Unknown',
       category: tx['Category Description'] || tx['Category (Old)'] || 'Uncategorized',
       category_details: tx['Category Details'] || null,
-      account: tx['Account'] || 'Unspecified'
+      account: typeof tx.Account === 'object'
+        ? tx.Account.display || tx.Account.name || 'Unnamed Account'
+        : tx.Account,
+      bank: tx.Bank || null
     }))
   };
 }
