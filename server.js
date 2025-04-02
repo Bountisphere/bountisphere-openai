@@ -1,159 +1,184 @@
-// 🌐 Bountisphere AI Money Coach Server
-import express from "express";
-import cors from "cors";
-import bodyParser from "body-parser";
-import fetch from "node-fetch";
-import OpenAI from "openai";
-import dotenv from "dotenv";
+import express from 'express';
+import bodyParser from 'body-parser';
+import OpenAI from 'openai';
+import fetch from 'node-fetch';
+import dotenv from 'dotenv';
+
 dotenv.config();
 
 const app = express();
-app.use(cors());
 app.use(bodyParser.json());
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+
+console.log('[🧪 OpenAI SDK VERSION]', OpenAI.VERSION || 'VERSION not available');
+console.log('[🧪 openai.responses.create]', typeof openai.responses?.create === 'function' ? '✅ OK' : '❌ Not found');
+
+const MODEL = 'gpt-4o-mini';
 const BUBBLE_API_KEY = process.env.BUBBLE_API_KEY;
-const BUBBLE_URL = "https://app.bountisphere.com/api/1.1/obj/transactions";
-const CREDIT_CARD_URL = "https://app.bountisphere.com/api/1.1/obj/credit_card";
-const LOANS_URL = "https://app.bountisphere.com/api/1.1/obj/loans";
-const INVESTMENTS_URL = "https://app.bountisphere.com/api/1.1/obj/investments";
+const BUBBLE_URL = process.env.BUBBLE_API_URL;
+const DEFAULT_USER_ID = '1735159562002x959413891769328900';
+const FILE_VECTOR_STORE_ID = 'vs_JScHftFeKAv35y4QHPz9QwMb';
 
-// 🔄 Generic Bubble fetcher
-async function fetchBubbleData(url, constraints) {
-  const fullUrl = `${url}?constraints=${encodeURIComponent(JSON.stringify(constraints))}&limit=1000`;
-  const response = await fetch(fullUrl, {
-    headers: { Authorization: `Bearer ${BUBBLE_API_KEY}` },
-  });
-  return response.json();
-}
+const tools = [
+  {
+    type: 'function',
+    name: 'get_user_transactions',
+    description: "Return the user's recent financial transactions, including date, amount, category, merchant, account, and bank.",
+    parameters: {
+      type: 'object',
+      properties: {
+        userId: { type: 'string', description: 'Bountisphere user ID' },
+        start_date: { type: 'string', description: 'Start date YYYY-MM-DD' },
+        end_date: { type: 'string', description: 'End date YYYY-MM-DD' }
+      },
+      required: ['userId', 'start_date', 'end_date'],
+      additionalProperties: false
+    }
+  },
+  {
+    type: 'file_search',
+    vector_store_ids: [FILE_VECTOR_STORE_ID]
+  },
+  {
+    type: 'web_search'
+  }
+];
 
-// 📊 Transactions
-async function fetchTransactions(userId, startDate, endDate) {
-  const constraints = [
-    { key: "Account Holder", constraint_type: "equals", value: userId },
-    { key: "Date", constraint_type: "greater than", value: startDate },
-    { key: "Date", constraint_type: "less than", value: endDate },
-  ];
-  const data = await fetchBubbleData(BUBBLE_URL, constraints);
-  return data.response.results.map((tx) => ({
-    date: tx.Date,
-    amount: tx.Amount,
-    merchant: tx["Merchant Name"] || tx.Description || "Unknown",
-    category: tx["Category Description"] || tx["Category (Old)"] || "Uncategorized",
-    category_details: tx["Category Details"] || null,
-    account: tx["Account"] || "Unspecified",
-    bank: tx["Bank"] || "Unknown",
-  }));
-}
-
-// 💳 Credit Cards
-async function fetchCreditCards(userId) {
-  const constraints = [
-    { key: "Created By", constraint_type: "equals", value: userId },
-  ];
-  const data = await fetchBubbleData(CREDIT_CARD_URL, constraints);
-  return data.response.results.map((card) => ({
-    account: card.Account,
-    current_balance: card["Current Balance"],
-    available_credit: card["Available Credit"],
-    interest_rate: card["Interest Rate"],
-    payment_due_date: card["Payment Due Date"],
-    min_payment_due: card["Min Payment Due"],
-  }));
-}
-
-// 🏦 Loans
-async function fetchLoans(userId) {
-  const constraints = [
-    { key: "Created By", constraint_type: "equals", value: userId },
-  ];
-  const data = await fetchBubbleData(LOANS_URL, constraints);
-  return data.response.results.map((loan) => ({
-    account: loan.Account,
-    current_loan_balance: loan["Current Loan Balance"],
-    loan_type: loan["Loan Type"],
-    interest_rate: loan["Interest Rate"],
-    origination_date: loan["Loan Origination Date"],
-    payoff_date: loan["Payoff Date"],
-    ytd_interest_paid: loan["YTD interest paid"],
-    ytd_principal_paid: loan["YTD principle paid"],
-  }));
-}
-
-// 📈 Investments
-async function fetchInvestments(userId) {
-  const constraints = [
-    { key: "Created By", constraint_type: "equals", value: userId },
-  ];
-  const data = await fetchBubbleData(INVESTMENTS_URL, constraints);
-  return data.response.results.map((inv) => ({
-    account: inv.Account,
-    current_balance: inv["Current Balance"],
-    quantity: inv["Quanity of Shares or Units"],
-    cost_basis: inv["Cost Basis"],
-    ticker_symbol: inv["Ticker Symbol"],
-  }));
-}
-
-// 🧠 Ask AI Coach Endpoint
-app.post("/ask_ai_coach", async (req, res) => {
-  const { userId, input } = req.body;
-  if (!userId || !input) return res.status(400).json({ error: "Missing userId or input" });
-
-  // ⏱ Default range: last 6 months
-  const now = new Date();
-  const endDate = now.toISOString();
-  const startDate = new Date(now.setMonth(now.getMonth() - 6)).toISOString();
+// 🧠 AI endpoint
+app.post('/ask', async (req, res) => {
+  const { userMessage, userId, userLocalDate } = req.body;
+  const targetUserId = userId || DEFAULT_USER_ID;
+  const today = userLocalDate || new Date().toDateString();
 
   try {
-    const [transactions, creditCards, loans, investments] = await Promise.all([
-      fetchTransactions(userId, startDate, endDate),
-      fetchCreditCards(userId),
-      fetchLoans(userId),
-      fetchInvestments(userId),
-    ]);
+    const input = [
+      {
+        role: 'user',
+        content: userMessage
+      }
+    ];
 
-    // ❌ Graceful fallback if no data
-    const hasData =
-      transactions.length > 0 || creditCards.length > 0 || loans.length > 0 || investments.length > 0;
+    const instructions = `You are the Bountisphere Money Coach — a smart, supportive, and expert financial assistant and behavioral coach.
 
-    if (!hasData) {
-      return res.json({
-        answer:
-          "Hi there! It looks like you haven’t connected any bank accounts yet. To get the most out of the Bountisphere Money Coach — including personalized insights and spending advice — connect your accounts in the 'Manage' tab. I'm here whenever you're ready!",
-      });
-    }
+Your mission is to help people understand their money with insight, compassion, and clarity. You read their real transactions, identify spending patterns, and help them build better habits using principles from psychology, behavioral science, and financial planning.
 
-    // 🧠 Send to OpenAI
-    const completion = await openai.chat.completions.create({
-      model: "gpt-4o",
-      messages: [
-        {
-          role: "system",
-          content:
-            "You are the Bountisphere Money Coach. Be compassionate and non-judgmental. Offer personalized financial guidance, budgeting tips, and behavior-based money insights. You have access to the user's spending, credit cards, loans, and investments. Respond in plain language. Suggest realistic improvements.",
-        },
-        {
-          role: "user",
-          content: `Here’s some financial data for a user.\n\nTransactions: ${JSON.stringify(
-            transactions
-          )}\n\nCredit Cards: ${JSON.stringify(creditCards)}\n\nLoans: ${JSON.stringify(
-            loans
-          )}\n\nInvestments: ${JSON.stringify(investments)}\n\nUser Question: ${input}`,
-        },
-      ],
+Always be on the user's side — non-judgmental, clear, warm, and helpful. Your tone should inspire calm confidence and forward progress.
+
+• If the question is about transactions or spending, call \`get_user_transactions\` first.
+• For app features or help, use \`file_search\`.
+• For market/economic questions, use \`web_search\`.
+
+Use one tool only per question. Today is ${today}.
+Current user ID: ${targetUserId}`;
+
+    console.log('[📤 Initial Input]', input);
+
+    const initialResponse = await openai.responses.create({
+      model: MODEL,
+      input,
+      instructions,
+      tools,
+      tool_choice: 'auto'
     });
 
-    const output = completion.choices[0].message.content;
-    res.json({ answer: output });
+    console.log('[📥 Initial Response]', JSON.stringify(initialResponse, null, 2));
+
+    const toolCall = initialResponse.output?.find(item => item.type === 'function_call');
+    if (!toolCall) {
+      const fallback = initialResponse.output?.find(item => item.type === 'message')?.content?.[0]?.text;
+      return res.json({ message: fallback || 'Sorry, I couldn’t generate a response.' });
+    }
+
+    const args = JSON.parse(toolCall.arguments);
+    const result = await fetchTransactionsFromBubble(args.start_date, args.end_date, args.userId);
+    console.log('[✅ Tool Output]', result);
+
+    const followUp = await openai.responses.create({
+      model: MODEL,
+      input: [
+        ...input,
+        toolCall,
+        {
+          type: 'function_call_output',
+          call_id: toolCall.call_id,
+          output: JSON.stringify(result)
+        }
+      ],
+      instructions,
+      tools
+    });
+
+    console.log('[🧠 Final AI Response]', JSON.stringify(followUp, null, 2));
+
+    const reply = followUp.output?.find(item => item.type === 'message');
+    const text = reply?.content?.find(c => c.type === 'output_text')?.text ||
+                 reply?.content?.find(c => c.type === 'text')?.text;
+
+    return res.json({
+      message: text || `No transactions found between ${args.start_date} and ${args.end_date}. Want to try a different range?`
+    });
+
   } catch (err) {
-    console.error("❌ AI Coach error:", err);
-    res.status(500).json({ error: "Money Coach failed to process your request." });
+    console.error('❌ Error in /ask handler:', err);
+    return res.status(500).json({ error: err.message || 'Unexpected server error' });
   }
 });
 
-// 🚀 Launch Server
+// 🔄 Transaction fetcher with pagination
+async function fetchTransactionsFromBubble(startDate, endDate, userId) {
+  const allTransactions = [];
+  let cursor = 0;
+  let hasMore = true;
+
+  while (hasMore) {
+    const constraints = [
+      { key: 'Account Holder', constraint_type: 'equals', value: userId },
+      { key: 'Date', constraint_type: 'greater than', value: startDate },
+      { key: 'Date', constraint_type: 'less than', value: endDate }
+    ];
+
+    const url = `${BUBBLE_URL}?constraints=${encodeURIComponent(JSON.stringify(constraints))}&cursor=${cursor}`;
+
+    const response = await fetch(url, {
+      headers: {
+        Authorization: `Bearer ${BUBBLE_API_KEY}`
+      }
+    });
+
+    const data = await response.json();
+
+    if (!data?.response?.results) {
+      throw new Error('No transaction data returned from Bubble');
+    }
+
+    allTransactions.push(
+      ...data.response.results.map(tx => ({
+        date: tx.Date,
+        amount: tx.Amount,
+        merchant: tx['Merchant Name'] || tx.Description || 'Unknown',
+        category: tx['Category Description'] || tx['Category (Old)'] || 'Uncategorized',
+        category_details: tx['Category Details'] || null,
+        account: tx['Account'] || 'Unspecified',
+        bank: tx['Bank'] || null
+      }))
+    );
+
+    if (data.response.remaining === 0 || !data.response.remaining) {
+      hasMore = false;
+    } else {
+      cursor += data.response.count || 100;
+    }
+  }
+
+  return {
+    totalCount: allTransactions.length,
+    transactions: allTransactions
+  };
+}
+
+// 🚀 Launch server
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`🚀 Bountisphere Money Coach running on port ${PORT}`);
+  console.log(`🚀 Bountisphere server running on port ${PORT}`);
 });
