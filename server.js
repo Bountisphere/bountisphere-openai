@@ -1,145 +1,182 @@
-// server.js (Updated to include get_full_account_data)
-
-import express from "express";
-import bodyParser from "body-parser";
-import dotenv from "dotenv";
-import OpenAI from "openai";
-import fetch from "node-fetch";
+import express from 'express';
+import bodyParser from 'body-parser';
+import OpenAI from 'openai';
+import fetch from 'node-fetch';
+import dotenv from 'dotenv';
 
 dotenv.config();
 
 const app = express();
-const port = process.env.PORT || 3000;
-
 app.use(bodyParser.json());
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
-const assistantId = process.env.OPENAI_ASSISTANT_ID;
+console.log('[🧪 OpenAI SDK VERSION]', OpenAI.VERSION || 'VERSION not available');
+console.log('[🧪 openai.responses.create]', typeof openai.responses?.create === 'function' ? '✅ OK' : '❌ Not found');
 
-const instructions = `
-You are the Bountisphere Money Coach — a smart, supportive, and expert financial assistant and behavioral coach.
-
-Your mission is to help people understand their money with insight, compassion, and clarity. You read their real transactions, identify spending patterns, and help them build better habits using principles from psychology, behavioral science, and financial planning.
-
-Always be on the user's side — non-judgmental, clear, warm, and helpful. Your tone should inspire calm confidence and forward progress.
-
-• If the question is about transactions or spending, call `get_user_transactions` first.
-• If the question is about a specific account’s credit card, loan, or investment details, call `get_full_account_data` with the account ID.
-• For app features or help, use `file_search`.
-• For market/economic questions, use `web_search`.
-`;
+const MODEL = 'gpt-4o-mini';
+const BUBBLE_API_KEY = process.env.BUBBLE_API_KEY;
+const BUBBLE_URL = process.env.BUBBLE_API_URL;
+const DEFAULT_USER_ID = '1735159562002x959413891769328900';
+const FILE_VECTOR_STORE_ID = 'vs_JScHftFeKAv35y4QHPz9QwMb';
 
 const tools = [
   {
-    type: "function",
-    function: {
-      name: "get_user_transactions",
-      description: "Gets the user's most recent financial transactions from Bubble.io.",
-      parameters: {
-        type: "object",
-        properties: {
-          user_id: {
-            type: "string",
-            description: "The Bubble user ID to fetch transactions for."
-          }
-        },
-        required: ["user_id"]
-      }
+    type: 'function',
+    name: 'get_user_transactions',
+    description: "Return the user's recent financial transactions, including date, amount, category, merchant, account, and bank.",
+    parameters: {
+      type: 'object',
+      properties: {
+        userId: { type: 'string', description: 'Bountisphere user ID' },
+        start_date: { type: 'string', description: 'Start date YYYY-MM-DD' },
+        end_date: { type: 'string', description: 'End date YYYY-MM-DD' }
+      },
+      required: ['userId', 'start_date', 'end_date'],
+      additionalProperties: false
     }
   },
   {
-    type: "function",
-    function: {
-      name: "get_full_account_data",
-      description: "Retrieves a user's account and its linked credit card, loan, or investment if available.",
-      parameters: {
-        type: "object",
-        properties: {
-          account_id: {
-            type: "string",
-            description: "The ID of the account from Bubble to retrieve."
-          }
-        },
-        required: ["account_id"]
-      }
-    }
+    type: 'file_search',
+    vector_store_ids: [FILE_VECTOR_STORE_ID]
+  },
+  {
+    type: 'web_search'
   }
 ];
 
-app.post("/chat", async (req, res) => {
-  const { user_input, user_id } = req.body;
+// 🧠 AI endpoint
+app.post('/ask', async (req, res) => {
+  const { userMessage, userId, userLocalDate } = req.body;
+  const targetUserId = userId || DEFAULT_USER_ID;
+  const today = userLocalDate || new Date().toDateString();
 
   try {
-    const thread = await openai.beta.threads.create();
+    const input = [
+      {
+        role: 'user',
+        content: userMessage
+      }
+    ];
 
-    await openai.beta.threads.messages.create(thread.id, {
-      role: "user",
-      content: user_input
+    const instructions = `You are the Bountisphere Money Coach — a smart, supportive, and expert financial assistant and behavioral coach.
+Your mission is to help people understand their money with insight, compassion, and clarity. You read their real transactions, identify spending patterns, and help them build better habits using principles from psychology, behavioral science, and financial planning.
+Always be on the user's side — non-judgmental, clear, warm, and helpful. Your tone should inspire calm confidence and forward progress.
+Do not refer to the files in the vector store or uploaded files.
+• If the question is about transactions or spending, call \`get_user_transactions\` first.
+• For app features or help, use \`file_search\`.
+• For market/economic questions, use \`web_search\`.
+
+Use one tool only per question. Today is ${today}.
+Current user ID: ${targetUserId}`;
+
+    console.log('[📤 Initial Input]', input);
+
+    const initialResponse = await openai.responses.create({
+      model: MODEL,
+      input,
+      instructions,
+      tools,
+      tool_choice: 'auto'
     });
 
-    const run = await openai.beta.threads.runs.create(thread.id, {
-      assistant_id: assistantId,
+    console.log('[📥 Initial Response]', JSON.stringify(initialResponse, null, 2));
+
+    const toolCall = initialResponse.output?.find(item => item.type === 'function_call');
+    if (!toolCall) {
+      const fallback = initialResponse.output?.find(item => item.type === 'message')?.content?.[0]?.text;
+      return res.json({ message: fallback || 'Sorry, I couldn’t generate a response.' });
+    }
+
+    const args = JSON.parse(toolCall.arguments);
+    const result = await fetchTransactionsFromBubble(args.start_date, args.end_date, args.userId);
+    console.log('[✅ Tool Output]', result);
+
+    const followUp = await openai.responses.create({
+      model: MODEL,
+      input: [
+        ...input,
+        toolCall,
+        {
+          type: 'function_call_output',
+          call_id: toolCall.call_id,
+          output: JSON.stringify(result)
+        }
+      ],
       instructions,
       tools
     });
 
-    let toolOutputs = [];
+    console.log('[🧠 Final AI Response]', JSON.stringify(followUp, null, 2));
 
-    let runStatus = await openai.beta.threads.runs.retrieve(thread.id, run.id);
-    while (runStatus.status === "in_progress" || runStatus.status === "requires_action") {
-      if (runStatus.status === "requires_action" && runStatus.required_action?.submit_tool_outputs) {
-        const toolCalls = runStatus.required_action.submit_tool_outputs.tool_calls;
+    const reply = followUp.output?.find(item => item.type === 'message');
+    const text = reply?.content?.find(c => c.type === 'output_text')?.text ||
+                 reply?.content?.find(c => c.type === 'text')?.text;
 
-        for (const toolCall of toolCalls) {
-          if (toolCall.function.name === "get_user_transactions") {
-            const { user_id } = JSON.parse(toolCall.function.arguments);
+    return res.json({
+      message: text || `No transactions found between ${args.start_date} and ${args.end_date}. Want to try a different range?`
+    });
 
-            const txRes = await fetch(`https://app.bountisphere.com/api/1.1/obj/transaction?constraints=[{"key":"Created By","constraint_type":"equals","value":"${user_id}"}]`);
-            const txData = await txRes.json();
-
-            toolOutputs.push({
-              tool_call_id: toolCall.id,
-              output: JSON.stringify(txData.response.results)
-            });
-          }
-
-          if (toolCall.function.name === "get_full_account_data") {
-            const { account_id } = JSON.parse(toolCall.function.arguments);
-
-            const accountRes = await fetch(`https://app.bountisphere.com/api/1.1/obj/account/${account_id}`, {
-              headers: {
-                "Content-Type": "application/json"
-              }
-            });
-
-            const accountData = await accountRes.json();
-
-            toolOutputs.push({
-              tool_call_id: toolCall.id,
-              output: JSON.stringify(accountData.response)
-            });
-          }
-        }
-
-        await openai.beta.threads.runs.submitToolOutputs(thread.id, run.id, {
-          tool_outputs: toolOutputs
-        });
-      }
-
-      runStatus = await openai.beta.threads.runs.retrieve(thread.id, run.id);
-    }
-
-    const messages = await openai.beta.threads.messages.list(thread.id);
-    const lastMessage = messages.data.find((msg) => msg.role === "assistant");
-
-    res.json({ reply: lastMessage?.content?.[0]?.text?.value || "No response." });
-  } catch (error) {
-    console.error("Error handling chat:", error);
-    res.status(500).json({ error: "Something went wrong." });
+  } catch (err) {
+    console.error('❌ Error in /ask handler:', err);
+    return res.status(500).json({ error: err.message || 'Unexpected server error' });
   }
 });
 
-app.listen(port, () => {
-  console.log(`Server running on http://localhost:${port}`);
+// 🔄 Transaction fetcher with pagination
+async function fetchTransactionsFromBubble(startDate, endDate, userId) {
+  const allTransactions = [];
+  let cursor = 0;
+  let hasMore = true;
+
+  while (hasMore) {
+    const constraints = [
+      { key: 'Account Holder', constraint_type: 'equals', value: userId },
+      { key: 'Date', constraint_type: 'greater than', value: startDate },
+      { key: 'Date', constraint_type: 'less than', value: endDate }
+    ];
+
+    const url = `${BUBBLE_URL}?constraints=${encodeURIComponent(JSON.stringify(constraints))}&cursor=${cursor}`;
+
+    const response = await fetch(url, {
+      headers: {
+        Authorization: `Bearer ${BUBBLE_API_KEY}`
+      }
+    });
+
+    const data = await response.json();
+
+    if (!data?.response?.results) {
+      throw new Error('No transaction data returned from Bubble');
+    }
+
+    allTransactions.push(
+      ...data.response.results.map(tx => ({
+        date: tx.Date,
+        amount: tx.Amount,
+        merchant: tx['Merchant Name'] || tx.Description || 'Unknown',
+        category: tx['Category Description'] || tx['Category (Old)'] || 'Uncategorized',
+        category_details: tx['Category Details'] || null,
+        account: tx['Account'] || 'Unspecified',
+        bank: tx['Bank'] || null
+      }))
+    );
+
+    if (data.response.remaining === 0 || !data.response.remaining) {
+      hasMore = false;
+    } else {
+      cursor += data.response.count || 100;
+    }
+  }
+
+  return {
+    totalCount: allTransactions.length,
+    transactions: allTransactions
+  };
+}
+
+// 🚀 Launch server
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+  console.log(`🚀 Bountisphere server running on port ${PORT}`);
 });
