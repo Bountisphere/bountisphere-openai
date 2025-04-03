@@ -1,4 +1,4 @@
-// ✅ Updated Bountisphere AI Server to Pull Data from Credit Card, Loans, and Investments Endpoints
+// ✅ Bountisphere AI Server – Now Fetching Real Credit Card, Loan, and Investment Data
 import express from 'express';
 import bodyParser from 'body-parser';
 import OpenAI from 'openai';
@@ -13,13 +13,14 @@ app.use(bodyParser.json());
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 const MODEL = 'gpt-4o-mini';
 const BUBBLE_API_KEY = process.env.BUBBLE_API_KEY;
+const BUBBLE_URL = process.env.BUBBLE_API_URL;
 const DEFAULT_USER_ID = '1735159562002x959413891769328900';
 const FILE_VECTOR_STORE_ID = 'vs_JScHftFeKAv35y4QHPz9QwMb';
 
+// Endpoint URLs for real financial objects
 const CREDIT_CARD_URL = 'https://app.bountisphere.com/api/1.1/obj/creditcard';
-const LOAN_URL = 'https://app.bountisphere.com/api/1.1/obj/loans';
-const INVESTMENT_URL = 'https://app.bountisphere.com/api/1.1/obj/investments';
-const TRANSACTION_URL = process.env.BUBBLE_API_URL;
+const LOANS_URL = 'https://app.bountisphere.com/api/1.1/obj/loans';
+const INVESTMENTS_URL = 'https://app.bountisphere.com/api/1.1/obj/investments';
 
 const tools = [
   {
@@ -33,13 +34,14 @@ const tools = [
         start_date: { type: 'string', description: 'Start date YYYY-MM-DD' },
         end_date: { type: 'string', description: 'End date YYYY-MM-DD' }
       },
-      required: ['userId', 'start_date', 'end_date']
+      required: ['userId', 'start_date', 'end_date'],
+      additionalProperties: false
     }
   },
   {
     type: 'function',
     name: 'get_full_account_data',
-    description: 'Return user’s credit cards, loans, and investments directly from the Bubble database.',
+    description: 'Return user’s credit card, loan, and investment data by calling actual Bubble API endpoints.',
     parameters: {
       type: 'object',
       properties: {
@@ -90,7 +92,7 @@ Today is ${today}. Current user ID: ${targetUserId}`;
     if (toolCall.name === 'get_user_transactions') {
       toolOutput = await fetchTransactionsFromBubble(args.start_date, args.end_date, args.userId);
     } else if (toolCall.name === 'get_full_account_data') {
-      toolOutput = await fetchAllAccounts(args.userId);
+      toolOutput = await fetchAccountData(args.userId);
     } else {
       throw new Error('Unrecognized tool call');
     }
@@ -132,7 +134,7 @@ async function fetchTransactionsFromBubble(startDate, endDate, userId) {
       { key: 'Date', constraint_type: 'greater than', value: startDate },
       { key: 'Date', constraint_type: 'less than', value: endDate }
     ];
-    const url = `${TRANSACTION_URL}?constraints=${encodeURIComponent(JSON.stringify(constraints))}&cursor=${cursor}`;
+    const url = `${BUBBLE_URL}?constraints=${encodeURIComponent(JSON.stringify(constraints))}&cursor=${cursor}`;
     const resp = await fetch(url, { headers: { Authorization: `Bearer ${BUBBLE_API_KEY}` } });
     const data = await resp.json();
     if (!data?.response?.results) throw new Error('No transaction data returned');
@@ -154,26 +156,25 @@ async function fetchTransactionsFromBubble(startDate, endDate, userId) {
   return { totalCount: all.length, transactions: all };
 }
 
-async function fetchAllAccounts(userId) {
-  const fetchFrom = async (url) => {
-    const constraints = [{ key: 'Created By', constraint_type: 'equals', value: userId }];
-    const res = await fetch(`${url}?constraints=${encodeURIComponent(JSON.stringify(constraints))}&limit=1000`, {
-      headers: { Authorization: `Bearer ${BUBBLE_API_KEY}` }
-    });
-    return res.json();
-  };
+async function fetchAccountData(userId) {
+  const constraints = [
+    { key: 'Created By', constraint_type: 'equals', value: userId }
+  ];
+  const headers = { Authorization: `Bearer ${BUBBLE_API_KEY}` };
 
-  const [creditCardData, loanData, investmentData] = await Promise.all([
+  async function fetchFrom(url) {
+    const resp = await fetch(`${url}?constraints=${encodeURIComponent(JSON.stringify(constraints))}&limit=1000`, { headers });
+    const data = await resp.json();
+    return data?.response?.results || [];
+  }
+
+  const [creditCards, loans, investments] = await Promise.all([
     fetchFrom(CREDIT_CARD_URL),
-    fetchFrom(LOAN_URL),
-    fetchFrom(INVESTMENT_URL)
+    fetchFrom(LOANS_URL),
+    fetchFrom(INVESTMENTS_URL)
   ]);
 
-  return {
-    creditCards: creditCardData.response?.results || [],
-    loans: loanData.response?.results || [],
-    investments: investmentData.response?.results || []
-  };
+  return { creditCards, loans, investments };
 }
 
 const PORT = process.env.PORT || 3000;
