@@ -1,4 +1,4 @@
-// ✅ Bountisphere AI Server Upgrade with Full Account Support
+// ✅ Bountisphere AI Server Upgrade with Direct CreditCard, Loan, Investment Fetching
 import express from 'express';
 import bodyParser from 'body-parser';
 import OpenAI from 'openai';
@@ -13,8 +13,9 @@ app.use(bodyParser.json());
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 const MODEL = 'gpt-4o-mini';
 const BUBBLE_API_KEY = process.env.BUBBLE_API_KEY;
-const BUBBLE_URL = process.env.BUBBLE_API_URL;
-const ACCOUNT_URL = process.env.BUBBLE_ACCOUNT_URL || 'https://app.bountisphere.com/api/1.1/obj/account';
+const CREDIT_URL = process.env.BUBBLE_CREDIT_URL;
+const LOAN_URL = process.env.BUBBLE_LOAN_URL;
+const INVESTMENT_URL = process.env.BUBBLE_INVESTMENT_URL;
 const DEFAULT_USER_ID = '1735159562002x959413891769328900';
 const FILE_VECTOR_STORE_ID = 'vs_JScHftFeKAv35y4QHPz9QwMb';
 
@@ -22,26 +23,25 @@ const tools = [
   {
     type: 'function',
     name: 'get_user_transactions',
-    description: "Return the user's recent financial transactions, including date, amount, category, merchant, account, and bank.",
+    description: "Return the user's recent financial transactions.",
     parameters: {
       type: 'object',
       properties: {
-        userId: { type: 'string', description: 'Bountisphere user ID' },
-        start_date: { type: 'string', description: 'Start date YYYY-MM-DD' },
-        end_date: { type: 'string', description: 'End date YYYY-MM-DD' }
+        userId: { type: 'string' },
+        start_date: { type: 'string' },
+        end_date: { type: 'string' }
       },
-      required: ['userId', 'start_date', 'end_date'],
-      additionalProperties: false
+      required: ['userId', 'start_date', 'end_date']
     }
   },
   {
     type: 'function',
     name: 'get_full_account_data',
-    description: 'Return user’s linked credit cards, loans, and investment balances from the Account object.',
+    description: 'Return user’s credit card, loan, and investment data.',
     parameters: {
       type: 'object',
       properties: {
-        userId: { type: 'string', description: 'Bountisphere user ID' }
+        userId: { type: 'string' }
       },
       required: ['userId']
     }
@@ -58,15 +58,10 @@ app.post('/ask', async (req, res) => {
   try {
     const input = [{ role: 'user', content: userMessage }];
 
-    const instructions = `You are the Bountisphere Money Coach — a smart, supportive, and expert financial assistant and behavioral coach.
-Your mission is to help people understand their money with insight, compassion, and clarity. You read their real transactions and account balances, identify patterns, and help them build better habits using principles from psychology, behavioral science, and financial planning.
-Always be on the user's side — non-judgmental, clear, warm, and helpful. Your tone should inspire calm confidence and forward progress.
-Do not refer to the files in the vector store.
-• For spending and transactions, call \`get_user_transactions\`
-• For credit card, loan, or investment questions, call \`get_full_account_data\`
-• For app help, use \`file_search\`
-• For market info, use \`web_search\`
-Today is ${today}. Current user ID: ${targetUserId}`;
+    const instructions = `You are the Bountisphere Money Coach — supportive and smart. Use tools:
+- get_user_transactions for transaction analysis
+- get_full_account_data for credit card, loan, investment info
+Today is ${today}. User ID: ${targetUserId}`;
 
     const initialResponse = await openai.responses.create({
       model: MODEL,
@@ -79,18 +74,18 @@ Today is ${today}. Current user ID: ${targetUserId}`;
     const toolCall = initialResponse.output?.find(i => i.type === 'function_call');
     if (!toolCall) {
       const fallback = initialResponse.output?.find(i => i.type === 'message')?.content?.[0]?.text;
-      return res.json({ message: fallback || 'Sorry, I couldn’t generate a response.' });
+      return res.json({ message: fallback || 'Sorry, no response generated.' });
     }
 
     const args = JSON.parse(toolCall.arguments);
     let toolOutput;
 
     if (toolCall.name === 'get_user_transactions') {
-      toolOutput = await fetchTransactionsFromBubble(args.start_date, args.end_date, args.userId);
+      toolOutput = await fetchTransactions(args.start_date, args.end_date, args.userId);
     } else if (toolCall.name === 'get_full_account_data') {
-      toolOutput = await fetchAccountData(args.userId);
+      toolOutput = await fetchFinancialData(args.userId);
     } else {
-      throw new Error('Unrecognized tool call');
+      throw new Error('Unknown tool call');
     }
 
     const followUp = await openai.responses.create({
@@ -112,71 +107,53 @@ Today is ${today}. Current user ID: ${targetUserId}`;
     const text = reply?.content?.find(c => c.type === 'output_text')?.text ||
                  reply?.content?.find(c => c.type === 'text')?.text;
 
-    return res.json({ message: text || `No results found.` });
+    return res.json({ message: text || 'No follow-up response.' });
   } catch (err) {
-    console.error('❌ Error in /ask handler:', err);
-    return res.status(500).json({ error: err.message || 'Unexpected server error' });
+    console.error('❌ Error:', err);
+    return res.status(500).json({ error: err.message });
   }
 });
 
-async function fetchTransactionsFromBubble(startDate, endDate, userId) {
+async function fetchTransactions(startDate, endDate, userId) {
   const all = [];
-  let cursor = 0;
-  let hasMore = true;
-
+  let cursor = 0, hasMore = true;
   while (hasMore) {
     const constraints = [
       { key: 'Account Holder', constraint_type: 'equals', value: userId },
       { key: 'Date', constraint_type: 'greater than', value: startDate },
       { key: 'Date', constraint_type: 'less than', value: endDate }
     ];
-    const url = `${BUBBLE_URL}?constraints=${encodeURIComponent(JSON.stringify(constraints))}&cursor=${cursor}`;
+    const url = `${process.env.BUBBLE_API_URL}?constraints=${encodeURIComponent(JSON.stringify(constraints))}&cursor=${cursor}`;
     const resp = await fetch(url, { headers: { Authorization: `Bearer ${BUBBLE_API_KEY}` } });
     const data = await resp.json();
-    if (!data?.response?.results) throw new Error('No transaction data returned');
-
-    all.push(...data.response.results.map(tx => ({
-      date: tx.Date,
-      amount: tx.Amount,
-      merchant: tx['Merchant Name'] || tx.Description || 'Unknown',
-      category: tx['Category Description'] || tx['Category (Old)'] || 'Uncategorized',
-      category_details: tx['Category Details'] || null,
-      account: tx['Account'] || 'Unspecified',
-      bank: tx['Bank'] || null
-    })));
-
+    if (!data?.response?.results) break;
+    all.push(...data.response.results);
     if (!data.response.remaining) hasMore = false;
     else cursor += data.response.count || 100;
   }
-
   return { totalCount: all.length, transactions: all };
 }
 
-async function fetchAccountData(userId) {
-  const constraints = [
-    { key: 'Account Holder', constraint_type: 'equals', value: userId }
-  ];
-  const url = `${ACCOUNT_URL}?constraints=${encodeURIComponent(JSON.stringify(constraints))}&limit=1000`;
+async function fetchFinancialData(userId) {
+  const [creditCards, loans, investments] = await Promise.all([
+    fetchByType(CREDIT_URL, userId),
+    fetchByType(LOAN_URL, userId),
+    fetchByType(INVESTMENT_URL, userId)
+  ]);
+  return {
+    creditCards,
+    loans,
+    investments,
+    totalAccounts: creditCards.length + loans.length + investments.length
+  };
+}
+
+async function fetchByType(endpoint, userId) {
+  const url = `${endpoint}?constraints=${encodeURIComponent(JSON.stringify([{ key: 'Account Holder', constraint_type: 'equals', value: userId }]))}&limit=1000`;
   const resp = await fetch(url, { headers: { Authorization: `Bearer ${BUBBLE_API_KEY}` } });
   const data = await resp.json();
-  if (!data?.response?.results) throw new Error('No account data returned');
-
-  const accounts = data.response.results.map(a => ({
-    id: a._id,
-    name: a['Account Name'],
-    type: a.Type || a.Subtype || 'manual',
-    subtype: a.Subtype || null,
-    balance: a.Balance || 0,
-    institution: a.Name || 'Unknown',
-    creditCardId: a['Credit Card'] || null,
-    loanId: a.Loan || null,
-    investmentId: a.Investment || null
-  }));
-
-  return { count: accounts.length, accounts };
+  return data?.response?.results || [];
 }
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`🚀 Bountisphere AI server running on port ${PORT}`);
-});
+app.listen(PORT, () => console.log(`🚀 Server live on port ${PORT}`));
