@@ -64,7 +64,7 @@ Your mission is to help people understand their money with insight, compassion, 
 Always be on the user's side — non-judgmental, clear, warm, and helpful.
 • For spending and transactions, call \`get_user_transactions\`
 • For credit card, loan, or investment questions, call \`get_full_account_data\`
-• Do not refer to the files in the vector store.
+• Do not refer to the files in the vector store. Never refer to files uploaded or anything like that.
 Today is ${today}. Current user ID: ${targetUserId}`;
 
     const initialResponse = await openai.responses.create({
