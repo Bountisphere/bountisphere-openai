@@ -1,4 +1,4 @@
-// ✅ Bountisphere AI Server — Credit Card Names via Account Lookup
+// ✅ Bountisphere AI Server — Complete Credit, Loan, and Investment Support
 import express from 'express';
 import bodyParser from 'body-parser';
 import OpenAI from 'openai';
@@ -14,10 +14,10 @@ const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 const MODEL = 'gpt-4o-mini';
 const BUBBLE_API_KEY = process.env.BUBBLE_API_KEY;
 const BUBBLE_URL = process.env.BUBBLE_API_URL;
-const ACCOUNT_URL = 'https://app.bountisphere.com/api/1.1/obj/account';
 const CREDIT_CARD_URL = 'https://app.bountisphere.com/api/1.1/obj/credit_card';
 const LOAN_URL = 'https://app.bountisphere.com/api/1.1/obj/loan';
 const INVESTMENT_URL = 'https://app.bountisphere.com/api/1.1/obj/investment';
+const ACCOUNT_URL = 'https://app.bountisphere.com/api/1.1/obj/account';
 const DEFAULT_USER_ID = '1735159562002x959413891769328900';
 const FILE_VECTOR_STORE_ID = 'vs_JScHftFeKAv35y4QHPz9QwMb';
 
@@ -152,9 +152,7 @@ async function fetchTransactionsFromBubble(startDate, endDate, userId) {
 }
 
 async function fetchCreditLoanInvestmentData(userId) {
-  const constraints = [
-    { key: 'Account Holder', constraint_type: 'equals', value: userId }
-  ];
+  const constraints = [{ key: 'Account Holder', constraint_type: 'equals', value: userId }];
 
   async function fetchData(url) {
     const resp = await fetch(`${url}?constraints=${encodeURIComponent(JSON.stringify(constraints))}&limit=1000`, {
@@ -173,14 +171,17 @@ async function fetchCreditLoanInvestmentData(userId) {
 
   const accountMap = {};
   for (const a of accounts) {
-    accountMap[a._id] = a['Account Name'] || 'Unnamed Card';
+    accountMap[a._id] = a['Account Name'] || a.Name || 'Unnamed Account';
   }
 
   const cards = creditCards.map(card => ({
     id: card._id,
     name: accountMap[card.Account] || 'Unnamed Card',
     availableCredit: card['Available Credit'],
-    currentBalance: card['Current Balance']
+    currentBalance: card['Current Balance'],
+    minPaymentDue: card['Min Payment Due'],
+    paymentDueDate: card['Payment Due Date'],
+    interestRate: card['Interest Rate']
   }));
 
   return { creditCards: cards, loans, investments };
