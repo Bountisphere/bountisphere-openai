@@ -1,4 +1,4 @@
-// ✅ Bountisphere AI Server – Now Fetching Real Credit Card, Loan, and Investment Data
+// ✅ Bountisphere AI Server — Credit Card Names via Account Lookup
 import express from 'express';
 import bodyParser from 'body-parser';
 import OpenAI from 'openai';
@@ -14,13 +14,12 @@ const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 const MODEL = 'gpt-4o-mini';
 const BUBBLE_API_KEY = process.env.BUBBLE_API_KEY;
 const BUBBLE_URL = process.env.BUBBLE_API_URL;
+const ACCOUNT_URL = 'https://app.bountisphere.com/api/1.1/obj/account';
+const CREDIT_CARD_URL = 'https://app.bountisphere.com/api/1.1/obj/credit_card';
+const LOAN_URL = 'https://app.bountisphere.com/api/1.1/obj/loan';
+const INVESTMENT_URL = 'https://app.bountisphere.com/api/1.1/obj/investment';
 const DEFAULT_USER_ID = '1735159562002x959413891769328900';
 const FILE_VECTOR_STORE_ID = 'vs_JScHftFeKAv35y4QHPz9QwMb';
-
-// Endpoint URLs for real financial objects
-const CREDIT_CARD_URL = 'https://app.bountisphere.com/api/1.1/obj/creditcard';
-const LOANS_URL = 'https://app.bountisphere.com/api/1.1/obj/loans';
-const INVESTMENTS_URL = 'https://app.bountisphere.com/api/1.1/obj/investments';
 
 const tools = [
   {
@@ -30,22 +29,21 @@ const tools = [
     parameters: {
       type: 'object',
       properties: {
-        userId: { type: 'string', description: 'Bountisphere user ID' },
-        start_date: { type: 'string', description: 'Start date YYYY-MM-DD' },
-        end_date: { type: 'string', description: 'End date YYYY-MM-DD' }
+        userId: { type: 'string' },
+        start_date: { type: 'string' },
+        end_date: { type: 'string' }
       },
-      required: ['userId', 'start_date', 'end_date'],
-      additionalProperties: false
+      required: ['userId', 'start_date', 'end_date']
     }
   },
   {
     type: 'function',
     name: 'get_full_account_data',
-    description: 'Return user’s credit card, loan, and investment data by calling actual Bubble API endpoints.',
+    description: 'Return user’s credit card, loan, and investment balances (with card names)',
     parameters: {
       type: 'object',
       properties: {
-        userId: { type: 'string', description: 'Bountisphere user ID' }
+        userId: { type: 'string' }
       },
       required: ['userId']
     }
@@ -61,15 +59,12 @@ app.post('/ask', async (req, res) => {
 
   try {
     const input = [{ role: 'user', content: userMessage }];
-
     const instructions = `You are the Bountisphere Money Coach — a smart, supportive, and expert financial assistant and behavioral coach.
 Your mission is to help people understand their money with insight, compassion, and clarity. You read their real transactions and account balances, identify patterns, and help them build better habits using principles from psychology, behavioral science, and financial planning.
-Always be on the user's side — non-judgmental, clear, warm, and helpful. Your tone should inspire calm confidence and forward progress.
-Do not refer to the files in the vector store.
+Always be on the user's side — non-judgmental, clear, warm, and helpful.
 • For spending and transactions, call \`get_user_transactions\`
 • For credit card, loan, or investment questions, call \`get_full_account_data\`
-• For app help, use \`file_search\`
-• For market info, use \`web_search\`
+• Do not refer to the files in the vector store.
 Today is ${today}. Current user ID: ${targetUserId}`;
 
     const initialResponse = await openai.responses.create({
@@ -92,7 +87,7 @@ Today is ${today}. Current user ID: ${targetUserId}`;
     if (toolCall.name === 'get_user_transactions') {
       toolOutput = await fetchTransactionsFromBubble(args.start_date, args.end_date, args.userId);
     } else if (toolCall.name === 'get_full_account_data') {
-      toolOutput = await fetchAccountData(args.userId);
+      toolOutput = await fetchCreditLoanInvestmentData(args.userId);
     } else {
       throw new Error('Unrecognized tool call');
     }
@@ -156,25 +151,39 @@ async function fetchTransactionsFromBubble(startDate, endDate, userId) {
   return { totalCount: all.length, transactions: all };
 }
 
-async function fetchAccountData(userId) {
+async function fetchCreditLoanInvestmentData(userId) {
   const constraints = [
-    { key: 'Created By', constraint_type: 'equals', value: userId }
+    { key: 'Account Holder', constraint_type: 'equals', value: userId }
   ];
-  const headers = { Authorization: `Bearer ${BUBBLE_API_KEY}` };
 
-  async function fetchFrom(url) {
-    const resp = await fetch(`${url}?constraints=${encodeURIComponent(JSON.stringify(constraints))}&limit=1000`, { headers });
+  async function fetchData(url) {
+    const resp = await fetch(`${url}?constraints=${encodeURIComponent(JSON.stringify(constraints))}&limit=1000`, {
+      headers: { Authorization: `Bearer ${BUBBLE_API_KEY}` }
+    });
     const data = await resp.json();
-    return data?.response?.results || [];
+    return data.response?.results || [];
   }
 
-  const [creditCards, loans, investments] = await Promise.all([
-    fetchFrom(CREDIT_CARD_URL),
-    fetchFrom(LOANS_URL),
-    fetchFrom(INVESTMENTS_URL)
+  const [creditCards, loans, investments, accounts] = await Promise.all([
+    fetchData(CREDIT_CARD_URL),
+    fetchData(LOAN_URL),
+    fetchData(INVESTMENT_URL),
+    fetchData(ACCOUNT_URL)
   ]);
 
-  return { creditCards, loans, investments };
+  const accountMap = {};
+  for (const a of accounts) {
+    accountMap[a._id] = a['Account Name'] || 'Unnamed Card';
+  }
+
+  const cards = creditCards.map(card => ({
+    id: card._id,
+    name: accountMap[card.Account] || 'Unnamed Card',
+    availableCredit: card['Available Credit'],
+    currentBalance: card['Current Balance']
+  }));
+
+  return { creditCards: cards, loans, investments };
 }
 
 const PORT = process.env.PORT || 3000;
