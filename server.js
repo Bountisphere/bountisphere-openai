@@ -1,4 +1,4 @@
-// ✅ Bountisphere AI Server — Complete Credit, Loan, and Investment Support
+// ✅ Bountisphere AI Server — Fix: Use "Created By" for Credit Cards
 import express from 'express';
 import bodyParser from 'body-parser';
 import OpenAI from 'openai';
@@ -14,10 +14,10 @@ const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 const MODEL = 'gpt-4o-mini';
 const BUBBLE_API_KEY = process.env.BUBBLE_API_KEY;
 const BUBBLE_URL = process.env.BUBBLE_API_URL;
+const ACCOUNT_URL = 'https://app.bountisphere.com/api/1.1/obj/account';
 const CREDIT_CARD_URL = 'https://app.bountisphere.com/api/1.1/obj/credit_card';
 const LOAN_URL = 'https://app.bountisphere.com/api/1.1/obj/loan';
 const INVESTMENT_URL = 'https://app.bountisphere.com/api/1.1/obj/investment';
-const ACCOUNT_URL = 'https://app.bountisphere.com/api/1.1/obj/account';
 const DEFAULT_USER_ID = '1735159562002x959413891769328900';
 const FILE_VECTOR_STORE_ID = 'vs_JScHftFeKAv35y4QHPz9QwMb';
 
@@ -64,7 +64,7 @@ Your mission is to help people understand their money with insight, compassion, 
 Always be on the user's side — non-judgmental, clear, warm, and helpful.
 • For spending and transactions, call \`get_user_transactions\`
 • For credit card, loan, or investment questions, call \`get_full_account_data\`
-• Do not refer to the files in the vector store. Never refer to files uploaded or anything like that.
+• Do not refer to the files in the vector store. And never mention files like in "the files you uploaded" as user's cannot upload files. 
 Today is ${today}. Current user ID: ${targetUserId}`;
 
     const initialResponse = await openai.responses.create({
@@ -152,9 +152,14 @@ async function fetchTransactionsFromBubble(startDate, endDate, userId) {
 }
 
 async function fetchCreditLoanInvestmentData(userId) {
-  const constraints = [{ key: 'Account Holder', constraint_type: 'equals', value: userId }];
+  const creditCardConstraints = [
+    { key: 'Created By', constraint_type: 'equals', value: userId }
+  ];
+  const defaultConstraints = [
+    { key: 'Account Holder', constraint_type: 'equals', value: userId }
+  ];
 
-  async function fetchData(url) {
+  async function fetchData(url, constraints) {
     const resp = await fetch(`${url}?constraints=${encodeURIComponent(JSON.stringify(constraints))}&limit=1000`, {
       headers: { Authorization: `Bearer ${BUBBLE_API_KEY}` }
     });
@@ -163,25 +168,22 @@ async function fetchCreditLoanInvestmentData(userId) {
   }
 
   const [creditCards, loans, investments, accounts] = await Promise.all([
-    fetchData(CREDIT_CARD_URL),
-    fetchData(LOAN_URL),
-    fetchData(INVESTMENT_URL),
-    fetchData(ACCOUNT_URL)
+    fetchData(CREDIT_CARD_URL, creditCardConstraints),
+    fetchData(LOAN_URL, defaultConstraints),
+    fetchData(INVESTMENT_URL, defaultConstraints),
+    fetchData(ACCOUNT_URL, defaultConstraints)
   ]);
 
   const accountMap = {};
   for (const a of accounts) {
-    accountMap[a._id] = a['Account Name'] || a.Name || 'Unnamed Account';
+    accountMap[a._id] = a['Account Name'] || 'Unnamed Card';
   }
 
   const cards = creditCards.map(card => ({
     id: card._id,
     name: accountMap[card.Account] || 'Unnamed Card',
     availableCredit: card['Available Credit'],
-    currentBalance: card['Current Balance'],
-    minPaymentDue: card['Min Payment Due'],
-    paymentDueDate: card['Payment Due Date'],
-    interestRate: card['Interest Rate']
+    currentBalance: card['Current Balance']
   }));
 
   return { creditCards: cards, loans, investments };
