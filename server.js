@@ -1,9 +1,14 @@
-// ✅ Bountisphere AI Server — Fix: Use "Created By" for Credit Cards
+// ✅ Bountisphere AI Server — Full version with /voice enabled
 import express from 'express';
 import bodyParser from 'body-parser';
 import OpenAI from 'openai';
 import fetch from 'node-fetch';
 import dotenv from 'dotenv';
+import fs from 'fs';
+import path from 'path';
+import { v4 as uuidv4 } from 'uuid';
+import FormData from 'form-data';
+import axios from 'axios';
 
 dotenv.config();
 
@@ -118,6 +123,62 @@ Today is ${today}. Current user ID: ${targetUserId}`;
   }
 });
 
+app.post('/voice', async (req, res) => {
+  try {
+    const { audioUrl } = req.body;
+    if (!audioUrl) return res.status(400).json({ error: 'Missing audioUrl' });
+
+    const audioRes = await axios.get(audioUrl, { responseType: 'arraybuffer' });
+    const tempFilePath = path.join('/tmp', `${uuidv4()}.mp3`);
+    fs.writeFileSync(tempFilePath, audioRes.data);
+
+    const formData = new FormData();
+    formData.append('file', fs.createReadStream(tempFilePath));
+    formData.append('model', 'whisper-1');
+
+    const whisperRes = await axios.post('https://api.openai.com/v1/audio/transcriptions', formData, {
+      headers: {
+        ...formData.getHeaders(),
+        Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+      },
+    });
+
+    const userInput = whisperRes.data.text;
+
+    const gptRes = await axios.post('https://api.openai.com/v1/chat/completions', {
+      model: 'gpt-4o',
+      messages: [
+        { role: 'system', content: 'You are a helpful and compassionate money coach.' },
+        { role: 'user', content: userInput },
+      ],
+    }, {
+      headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}` },
+    });
+
+    const gptOutput = gptRes.data.choices[0].message.content;
+
+    const speechRes = await axios.post('https://api.openai.com/v1/audio/speech', {
+      model: 'tts-1',
+      voice: 'nova',
+      input: gptOutput,
+    }, {
+      headers: {
+        Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+        'Content-Type': 'application/json',
+      },
+      responseType: 'arraybuffer',
+    });
+
+    const base64Audio = Buffer.from(speechRes.data).toString('base64');
+    fs.unlinkSync(tempFilePath);
+
+    res.json({ transcription: userInput, reply: gptOutput, audioBase64 });
+  } catch (err) {
+    console.error('❌ Voice processing error:', err.message || err);
+    res.status(500).json({ error: 'Something went wrong processing the voice input.' });
+  }
+});
+
 async function fetchTransactionsFromBubble(startDate, endDate, userId) {
   const all = [];
   let cursor = 0;
@@ -189,6 +250,7 @@ async function fetchCreditLoanInvestmentData(userId) {
   return { creditCards: cards, loans, investments };
 }
 
+console.log('✅ Server booting...');
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`🚀 Bountisphere AI server running on port ${PORT}`);
