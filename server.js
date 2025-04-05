@@ -1,14 +1,14 @@
-// ✅ Bountisphere AI Server — Full version with /voice enabled
+// ✅ Bountisphere AI Server — Updated with full /voice support and error handling
 import express from 'express';
 import bodyParser from 'body-parser';
 import OpenAI from 'openai';
 import fetch from 'node-fetch';
 import dotenv from 'dotenv';
-import fs from 'fs';
-import path from 'path';
+import axios from 'axios';
 import { v4 as uuidv4 } from 'uuid';
 import FormData from 'form-data';
-import axios from 'axios';
+import fs from 'fs';
+import path from 'path';
 
 dotenv.config();
 
@@ -56,6 +56,65 @@ const tools = [
   { type: 'file_search', vector_store_ids: [FILE_VECTOR_STORE_ID] },
   { type: 'web_search' }
 ];
+
+app.post('/voice', async (req, res) => {
+  const { audioUrl, userId } = req.body;
+  const targetUserId = userId || DEFAULT_USER_ID;
+
+  try {
+    console.log('🔗 Downloading audio from URL:', audioUrl);
+    const audioRes = await axios.get(audioUrl, { responseType: 'arraybuffer' });
+    const tempPath = `/tmp/${uuidv4()}.mp3`;
+    fs.writeFileSync(tempPath, Buffer.from(audioRes.data), 'binary');
+
+    console.log('🧠 Transcribing...');
+    const transcriptionResp = await openai.audio.transcriptions.create({
+      file: fs.createReadStream(tempPath),
+      model: 'whisper-1'
+    });
+
+    const transcription = transcriptionResp.text;
+    console.log('✅ Transcription:', transcription);
+
+    const instructions = `You are the Bountisphere Money Coach — a smart, supportive, and expert financial assistant and behavioral coach.
+Your mission is to help people understand their money with insight, compassion, and clarity. 
+Today is ${new Date().toDateString()}. Current user ID: ${targetUserId}`;
+
+    const chat = await openai.responses.create({
+      model: MODEL,
+      input: [{ role: 'user', content: transcription }],
+      instructions,
+      tools,
+      tool_choice: 'auto'
+    });
+
+    const reply = chat.output?.find(m => m.type === 'message')?.content?.[0]?.text || 'Sorry, I had trouble generating a response.';
+
+    let audioBase64;
+    try {
+      const speech = await openai.audio.speech.create({
+        model: 'tts-1',
+        voice: 'nova',
+        input: reply
+      });
+
+      const audioBuffer = Buffer.from(await speech.arrayBuffer());
+      audioBase64 = audioBuffer.toString('base64');
+    } catch (err) {
+      console.error('❌ Text-to-Speech failed:', err.message);
+      return res.status(500).json({ error: 'Text-to-speech conversion failed.' });
+    }
+
+    return res.json({
+      transcription,
+      reply,
+      audioBase64
+    });
+  } catch (err) {
+    console.error('❌ Voice processing error:', err.message);
+    return res.status(500).json({ error: 'Something went wrong processing the voice input.' });
+  }
+});
 
 app.post('/ask', async (req, res) => {
   const { userMessage, userId, userLocalDate } = req.body;
@@ -120,62 +179,6 @@ Today is ${today}. Current user ID: ${targetUserId}`;
   } catch (err) {
     console.error('❌ Error in /ask handler:', err);
     return res.status(500).json({ error: err.message || 'Unexpected server error' });
-  }
-});
-
-app.post('/voice', async (req, res) => {
-  try {
-    const { audioUrl } = req.body;
-    if (!audioUrl) return res.status(400).json({ error: 'Missing audioUrl' });
-
-    const audioRes = await axios.get(audioUrl, { responseType: 'arraybuffer' });
-    const tempFilePath = path.join('/tmp', `${uuidv4()}.mp3`);
-    fs.writeFileSync(tempFilePath, audioRes.data);
-
-    const formData = new FormData();
-    formData.append('file', fs.createReadStream(tempFilePath));
-    formData.append('model', 'whisper-1');
-
-    const whisperRes = await axios.post('https://api.openai.com/v1/audio/transcriptions', formData, {
-      headers: {
-        ...formData.getHeaders(),
-        Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-      },
-    });
-
-    const userInput = whisperRes.data.text;
-
-    const gptRes = await axios.post('https://api.openai.com/v1/chat/completions', {
-      model: 'gpt-4o',
-      messages: [
-        { role: 'system', content: 'You are a helpful and compassionate money coach.' },
-        { role: 'user', content: userInput },
-      ],
-    }, {
-      headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}` },
-    });
-
-    const gptOutput = gptRes.data.choices[0].message.content;
-
-    const speechRes = await axios.post('https://api.openai.com/v1/audio/speech', {
-      model: 'tts-1',
-      voice: 'nova',
-      input: gptOutput,
-    }, {
-      headers: {
-        Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-        'Content-Type': 'application/json',
-      },
-      responseType: 'arraybuffer',
-    });
-
-    const base64Audio = Buffer.from(speechRes.data).toString('base64');
-    fs.unlinkSync(tempFilePath);
-
-    res.json({ transcription: userInput, reply: gptOutput, audioBase64 });
-  } catch (err) {
-    console.error('❌ Voice processing error:', err.message || err);
-    res.status(500).json({ error: 'Something went wrong processing the voice input.' });
   }
 });
 
@@ -250,8 +253,8 @@ async function fetchCreditLoanInvestmentData(userId) {
   return { creditCards: cards, loans, investments };
 }
 
-console.log('✅ Server booting...');
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
+  console.log('✅ Server booting...');
   console.log(`🚀 Bountisphere AI server running on port ${PORT}`);
 });
