@@ -1,9 +1,14 @@
-// ✅ Bountisphere AI Server — Fix: Use "Created By" for Credit Cards
+// ✅ Bountisphere AI Server — Added /voice endpoint for end-to-end voice flow
 import express from 'express';
 import bodyParser from 'body-parser';
 import OpenAI from 'openai';
 import fetch from 'node-fetch';
 import dotenv from 'dotenv';
+import fs from 'fs';
+import path from 'path';
+import { v4 as uuidv4 } from 'uuid';
+import FormData from 'form-data';
+import axios from 'axios';
 
 dotenv.config();
 
@@ -59,13 +64,7 @@ app.post('/ask', async (req, res) => {
 
   try {
     const input = [{ role: 'user', content: userMessage }];
-    const instructions = `You are the Bountisphere Money Coach — a smart, supportive, and expert financial assistant and behavioral coach.
-Your mission is to help people understand their money with insight, compassion, and clarity. You read their real transactions and account balances, identify patterns, and help them build better habits using principles from psychology, behavioral science, and financial planning.
-Always be on the user's side — non-judgmental, clear, warm, and helpful.
-• For spending and transactions, call \`get_user_transactions\`
-• For credit card, loan, or investment questions, call \`get_full_account_data\`
-• Do not refer to the files in the vector store. And never mention files like in "the files you uploaded" as user's cannot upload files. 
-Today is ${today}. Current user ID: ${targetUserId}`;
+    const instructions = `You are the Bountisphere Money Coach — a smart, supportive, and expert financial assistant and behavioral coach.\nYour mission is to help people understand their money with insight, compassion, and clarity. You read their real transactions and account balances, identify patterns, and help them build better habits using principles from psychology, behavioral science, and financial planning.\nAlways be on the user's side — non-judgmental, clear, warm, and helpful.\n• For spending and transactions, call \`get_user_transactions\`\n• For credit card, loan, or investment questions, call \`get_full_account_data\`\n• Do not refer to the files in the vector store. And never mention files like in \"the files you uploaded\" as user's cannot upload files. \nToday is ${today}. Current user ID: ${targetUserId}`;
 
     const initialResponse = await openai.responses.create({
       model: MODEL,
@@ -115,6 +114,62 @@ Today is ${today}. Current user ID: ${targetUserId}`;
   } catch (err) {
     console.error('❌ Error in /ask handler:', err);
     return res.status(500).json({ error: err.message || 'Unexpected server error' });
+  }
+});
+
+app.post('/voice', async (req, res) => {
+  try {
+    const { audioUrl } = req.body;
+    if (!audioUrl) return res.status(400).json({ error: 'Missing audioUrl' });
+
+    const audioRes = await axios.get(audioUrl, { responseType: 'arraybuffer' });
+    const tempFilePath = path.join('/tmp', `${uuidv4()}.mp3`);
+    fs.writeFileSync(tempFilePath, audioRes.data);
+
+    const formData = new FormData();
+    formData.append('file', fs.createReadStream(tempFilePath));
+    formData.append('model', 'whisper-1');
+
+    const whisperRes = await axios.post('https://api.openai.com/v1/audio/transcriptions', formData, {
+      headers: {
+        ...formData.getHeaders(),
+        Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+      },
+    });
+
+    const userInput = whisperRes.data.text;
+
+    const gptRes = await axios.post('https://api.openai.com/v1/chat/completions', {
+      model: 'gpt-4o',
+      messages: [
+        { role: 'system', content: 'You are a helpful and compassionate money coach.' },
+        { role: 'user', content: userInput },
+      ],
+    }, {
+      headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}` },
+    });
+
+    const gptOutput = gptRes.data.choices[0].message.content;
+
+    const speechRes = await axios.post('https://api.openai.com/v1/audio/speech', {
+      model: 'tts-1',
+      voice: 'nova',
+      input: gptOutput,
+    }, {
+      headers: {
+        Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+        'Content-Type': 'application/json',
+      },
+      responseType: 'arraybuffer',
+    });
+
+    const base64Audio = Buffer.from(speechRes.data).toString('base64');
+    fs.unlinkSync(tempFilePath);
+
+    res.json({ transcription: userInput, reply: gptOutput, audioBase64 });
+  } catch (err) {
+    console.error('❌ Voice processing error:', err.message || err);
+    res.status(500).json({ error: 'Something went wrong processing the voice input.' });
   }
 });
 
