@@ -1,4 +1,4 @@
-// ✅ Bountisphere AI Server — Unified version with both /ask and /voice
+// ✅ Bountisphere AI Server — Unified with error-safe voice & full Ask features
 import express from 'express';
 import bodyParser from 'body-parser';
 import OpenAI from 'openai';
@@ -130,12 +130,14 @@ app.post('/voice', async (req, res) => {
   const { audioUrl, userId } = req.body;
   const targetUserId = userId || DEFAULT_USER_ID;
 
+  console.log('📩 Incoming /voice body:', req.body);
   if (!audioUrl || typeof audioUrl !== 'string' || !audioUrl.startsWith('http')) {
     console.error('❌ Invalid or missing audioUrl:', audioUrl);
     return res.status(400).json({ error: 'Invalid or missing audioUrl.' });
   }
 
   const tempPath = `/tmp/${uuidv4()}.mp3`;
+  let audioBase64 = null;
 
   try {
     const audioRes = await axios.get(audioUrl, { responseType: 'arraybuffer' });
@@ -143,6 +145,7 @@ app.post('/voice', async (req, res) => {
     if (!contentType.includes('audio')) throw new Error(`Invalid content-type: ${contentType}`);
 
     fs.writeFileSync(tempPath, Buffer.from(audioRes.data), 'binary');
+    console.log('✅ Audio file saved');
 
     const transcriptionResp = await openai.audio.transcriptions.create({
       file: fs.createReadStream(tempPath),
@@ -150,8 +153,9 @@ app.post('/voice', async (req, res) => {
     });
 
     const transcription = transcriptionResp.text;
-    const instructions = buildInstructions(targetUserId);
+    console.log('📝 Transcription:', transcription);
 
+    const instructions = buildInstructions(targetUserId);
     const chat = await openai.responses.create({
       model: MODEL,
       input: [{ role: 'user', content: transcription }],
@@ -161,6 +165,7 @@ app.post('/voice', async (req, res) => {
     });
 
     const reply = chat.output?.find(m => m.type === 'message')?.content?.[0]?.text || 'Sorry, I had trouble generating a response.';
+    console.log('💬 GPT reply:', reply);
 
     const speech = await openai.audio.speech.create({
       model: 'tts-1',
@@ -169,7 +174,7 @@ app.post('/voice', async (req, res) => {
     });
 
     const audioBuffer = Buffer.from(await speech.arrayBuffer());
-    const audioBase64 = audioBuffer.toString('base64');
+    audioBase64 = audioBuffer.toString('base64');
 
     fs.unlinkSync(tempPath);
     return res.json({ transcription, reply, audioBase64 });
