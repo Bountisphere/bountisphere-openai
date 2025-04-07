@@ -163,28 +163,63 @@ app.post('/voice', async (req, res) => {
     console.log('📝 Transcription:', transcription);
 
     const instructions = buildInstructions(targetUserId);
-    const chat = await openai.responses.create({
+    const input = [{ role: 'user', content: transcription }];
+
+    const initialResponse = await openai.responses.create({
       model: MODEL,
-      input: [{ role: 'user', content: transcription }],
+      input,
       instructions,
       tools,
       tool_choice: 'auto'
     });
 
-    const reply = chat.output?.find(m => m.type === 'message')?.content?.[0]?.text || 'Sorry, I had trouble generating a response.';
-    console.log('💬 GPT reply:', reply);
+    const toolCall = initialResponse.output?.find(i => i.type === 'function_call');
+    let finalReply;
+
+    if (toolCall) {
+      const args = JSON.parse(toolCall.arguments);
+      let toolOutput;
+
+      if (toolCall.name === 'get_user_transactions') {
+        toolOutput = await fetchTransactionsFromBubble(args.start_date, args.end_date, args.userId);
+      } else if (toolCall.name === 'get_full_account_data') {
+        toolOutput = await fetchCreditLoanInvestmentData(args.userId);
+      }
+
+      const followUp = await openai.responses.create({
+        model: MODEL,
+        input: [
+          ...input,
+          toolCall,
+          {
+            type: 'function_call_output',
+            call_id: toolCall.call_id,
+            output: JSON.stringify(toolOutput)
+          }
+        ],
+        instructions,
+        tools
+      });
+
+      finalReply = followUp.output?.find(i => i.type === 'message')?.content?.[0]?.text;
+    } else {
+      finalReply = initialResponse.output?.find(i => i.type === 'message')?.content?.[0]?.text;
+    }
+
+    const textResponse = finalReply || 'Sorry, I wasn’t able to find anything helpful.';
+    console.log('💬 Final voice reply:', textResponse);
 
     const speech = await openai.audio.speech.create({
       model: 'tts-1',
       voice: 'nova',
-      input: reply
+      input: textResponse
     });
 
     const audioBuffer = Buffer.from(await speech.arrayBuffer());
     audioBase64 = audioBuffer.toString('base64');
 
     fs.unlinkSync(tempPath);
-    return res.json({ transcription, reply, audioBase64 });
+    return res.json({ transcription, reply: textResponse, audioBase64 });
   } catch (err) {
     console.error('❌ Voice processing error:', err.message);
     if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath);
