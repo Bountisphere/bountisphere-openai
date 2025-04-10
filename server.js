@@ -213,9 +213,9 @@ app.post('/voice', async (req, res) => {
 
     const speech = await openai.audio.speech.create({
       model: 'tts-1',
-      voice: 'shimmer',
+      voice: 'nova',
       input: textResponse,
-      speed: 0.93
+      speed: 0.90
     });
 
     const audioBuffer = Buffer.from(await speech.arrayBuffer());
